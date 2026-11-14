@@ -166,7 +166,10 @@ Une application généraliste qui s'adapte à chaque utilisateur. Ordre recomman
      dans un KWin virtuel avec Xwayland (fenêtre visible, transparente, zone cliquable posée).
      Reste à vérifier sur un vrai bureau X11 : réception des clics (Xwayland refuse les clics
      simulés sans portail) ;
-   - b. séparer `mascot/mod.rs` en une **scène** commune (tick, rendu dans un Pixmap, clics et
+   - b. (en cours ; 1re étape ✔ : toute la plomberie Wayland rangée dans `App.wl`, sans
+     changement de comportement, vérifié sous KDE ; suite : `wl` facultatif, écrans par nom et
+     géométrie au lieu de `wl_output`, envoi d'image / clavier / curseur derrière une petite
+     interface, puis boucle X11 qui appelle la même logique) séparer `mascot/mod.rs` en une **scène** commune (tick, rendu dans un Pixmap, clics et
      touches abstraits, bulles, discussion) et un **affichage** (Wayland layer-shell / X11) ;
    - c. affichage X11 complet : écrans (RandR), clavier pour la bulle (fenêtre qui prend le
      focus seulement quand on clique dedans), fenêtre active (_NET_ACTIVE_WINDOW), plein écran,

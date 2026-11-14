@@ -96,26 +96,13 @@ fn make_main(shell: &LayerShell, comp: &CompositorState, qh: &QueueHandle<App>, 
 }
 
 struct App {
-    conn: Connection,
-    registry_state: RegistryState,
-    seat_state: SeatState,
-    output_state: OutputState,
-    compositor: CompositorState,
-    shm: Shm,
-    pool: SlotPool,
-    /// Deux tampons d'image réutilisés (double tampon). Jamais plus : si le compositeur les
-    /// garde tous (écran éteint, session verrouillée), on attend au lieu d'en créer d'autres.
-    tampons: Vec<Buffer>,
-    layer: LayerSurface,
-    layer_shell: LayerShell,
-    qh: QueueHandle<App>,
+    /// Tout ce qui est propre à Wayland (surfaces, tampons, sièges, protocoles).
+    wl: Wl,
     screens: Vec<Screen>,
     current: Option<wl_output::WlOutput>,
     /// Bureau virtuel courant et place du maki sur chaque bureau (écran, x).
     desktop: String,
     desk_pos: std::collections::HashMap<String, (Option<wl_output::WlOutput>, f32)>,
-    pointer: Option<ThemedPointer>,
-    keyboard: Option<wl_keyboard::WlKeyboard>,
     loop_handle: LoopHandle<'static, App>,
     kb_focus: bool,
     ctrl: bool,
@@ -138,8 +125,6 @@ struct App {
     /// Ce que contient déjà le calque des bulles : on ne le redessine que s'il change.
     bubble_key: Option<(String, usize, i32, i32, i32)>,
     bubble_lay: Option<draw::BubbleLayout>,
-    /// Une image attend encore d'être affichée par le compositeur.
-    frame_pending: Option<Instant>,
     /// Un dessin a été demandé pendant qu'une image était en route : il suit sans attendre.
     redessin_attendu: bool,
     /// Coût moyen d'une image (secondes), pour régler la cadence sur la machine.
@@ -206,12 +191,33 @@ struct App {
     /// Premier lancement : moment où ouvrir l'assistant d'accueil.
     accueil_a: Option<Instant>,
     dbg_taille: (u32, u32),
+    /// Un glisser passe au-dessus de nous (fichiers acceptables).
+    depot_survol: bool,
+}
+
+/// Plomberie Wayland du maki (séparée de la logique, qui pourra servir à l'affichage X11).
+struct Wl {
+    conn: Connection,
+    registry_state: RegistryState,
+    seat_state: SeatState,
+    output_state: OutputState,
+    compositor: CompositorState,
+    shm: Shm,
+    pool: SlotPool,
+    /// Deux tampons d'image réutilisés (double tampon). Jamais plus : si le compositeur les
+    /// garde tous (écran éteint, session verrouillée), on attend au lieu d'en créer d'autres.
+    tampons: Vec<Buffer>,
+    layer: LayerSurface,
+    layer_shell: LayerShell,
+    qh: QueueHandle<App>,
+    pointer: Option<ThemedPointer>,
+    keyboard: Option<wl_keyboard::WlKeyboard>,
+    /// Une image attend encore d'être affichée par le compositeur.
+    frame_pending: Option<Instant>,
     idle_notifier: Option<ExtIdleNotifierV1>,
     /// Glisser-déposer : des fichiers lâchés sur le maki ou la bulle sont joints à la question.
     dnd_manager: Option<DataDeviceManagerState>,
     dnd_device: Option<DataDevice>,
-    /// Un glisser passe au-dessus de nous (fichiers acceptables).
-    depot_survol: bool,
     /// Fenêtres par le protocole Wayland standard (hors KDE, qui a son script KWin).
     toplevel_mgr: Option<ZwlrForeignToplevelManagerV1>,
     toplevels: std::collections::HashMap<u32, (ZwlrForeignToplevelHandleV1, crate::toplevels::Fenetre, Option<wl_output::WlOutput>)>,
@@ -243,23 +249,38 @@ pub fn run(cfg: Config, rx: Channel<Msg>) -> Result<(), String> {
     let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(7);
 
     let mut app = App {
-        conn: conn.clone(),
-        registry_state: RegistryState::new(&globals),
-        seat_state: SeatState::new(&globals, &qh),
-        output_state: OutputState::new(&globals, &qh),
-        compositor,
-        shm,
-        pool,
-        tampons: Vec::new(),
-        layer,
-        layer_shell,
-        qh: qh.clone(),
+        wl: Wl {
+            conn: conn.clone(),
+            registry_state: RegistryState::new(&globals),
+            seat_state: SeatState::new(&globals, &qh),
+            output_state: OutputState::new(&globals, &qh),
+            compositor,
+            shm,
+            pool,
+            tampons: Vec::new(),
+            layer,
+            layer_shell,
+            qh: qh.clone(),
+            pointer: None,
+            keyboard: None,
+            frame_pending: None,
+            idle_notifier: globals.bind::<ExtIdleNotifierV1, _, _>(&qh, 1..=1, ()).ok(),
+            dnd_manager: DataDeviceManagerState::bind(&globals, &qh).ok(),
+            dnd_device: None,
+            // KDE n'offre pas ce protocole (et a son script KWin) ; ailleurs, il remplace kdotool.
+            toplevel_mgr: if std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_uppercase().contains("KDE") {
+                None
+            } else {
+                globals.bind::<ZwlrForeignToplevelManagerV1, _, _>(&qh, 1..=3, ()).ok()
+            },
+            toplevels: Default::default(),
+            seat: None,
+            idle: None,
+        },
         screens: vec![],
         current: None,
         desktop: crate::kde::current().unwrap_or_default(),
         desk_pos: Default::default(),
-        pointer: None,
-        keyboard: None,
         loop_handle: event_loop.handle(),
         kb_focus: false,
         ctrl: false,
@@ -278,7 +299,6 @@ pub fn run(cfg: Config, rx: Channel<Msg>) -> Result<(), String> {
         bubble_zone: None,
         bubble_key: None,
         bubble_lay: None,
-        frame_pending: None,
         redessin_attendu: false,
         cout_image: 0.004,
         configured_once: false,
@@ -306,19 +326,7 @@ pub fn run(cfg: Config, rx: Channel<Msg>) -> Result<(), String> {
         relance_differee: false,
         accueil_a: (!cfg.accueil).then(|| Instant::now() + Duration::from_secs(4)),
         dbg_taille: (0, 0),
-        idle_notifier: globals.bind::<ExtIdleNotifierV1, _, _>(&qh, 1..=1, ()).ok(),
-        dnd_manager: DataDeviceManagerState::bind(&globals, &qh).ok(),
-        dnd_device: None,
         depot_survol: false,
-        // KDE n'offre pas ce protocole (et a son script KWin) ; ailleurs, il remplace kdotool.
-        toplevel_mgr: if std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_uppercase().contains("KDE") {
-            None
-        } else {
-            globals.bind::<ZwlrForeignToplevelManagerV1, _, _>(&qh, 1..=3, ()).ok()
-        },
-        toplevels: Default::default(),
-        seat: None,
-        idle: None,
         entered: false,
         chat: Chat::new(cfg.clone()),
         chat_layout: None,
@@ -367,7 +375,7 @@ pub fn run(cfg: Config, rx: Channel<Msg>) -> Result<(), String> {
 
 impl App {
     fn geom(&self, o: &wl_output::WlOutput) -> Option<(f32, f32, f32, f32)> {
-        let i = self.output_state.info(o)?;
+        let i = self.wl.output_state.info(o)?;
         let (x, y) = i.logical_position?;
         let (w, h) = i.logical_size?;
         Some((x as f32, y as f32, w as f32, h as f32))
@@ -407,13 +415,13 @@ impl App {
     /// Déplace la surface du maki sur un autre écran.
     fn move_to(&mut self, o: wl_output::WlOutput) {
         let k = if self.chat.open { KeyboardInteractivity::OnDemand } else { KeyboardInteractivity::None };
-        self.layer = make_main(&self.layer_shell, &self.compositor, &self.qh, Some(&o), self.sw, self.sh, k);
+        self.wl.layer = make_main(&self.wl.layer_shell, &self.wl.compositor, &self.wl.qh, Some(&o), self.sw, self.sh, k);
         // Nouvelle surface : tampons neufs (l'ancienne surface rend les siens en disparaissant).
-        self.tampons.clear();
+        self.wl.tampons.clear();
         self.interactivity = k;
         self.configured = false;
         self.configured_once = false;
-        self.frame_pending = None;
+        self.wl.frame_pending = None;
         self.origin = (0, 0);
         self.kb_focus = false;
         self.current = Some(o);
@@ -422,10 +430,10 @@ impl App {
     fn area(&self) -> (f32, f32) {
         let cur = self.current.as_ref().and_then(|c| self.screens.iter().find(|s| &s.out == c)).and_then(|s| s.area);
         cur.or(self.area).unwrap_or_else(|| {
-            self.output_state
+            self.wl.output_state
                 .outputs()
                 .next()
-                .and_then(|o| self.output_state.info(&o))
+                .and_then(|o| self.wl.output_state.info(&o))
                 .and_then(|i| i.logical_size)
                 .map(|(w, h)| (w as f32, h as f32))
                 .unwrap_or((1920.0, 1080.0))
@@ -697,7 +705,7 @@ impl App {
     }
 
     fn output_named(&self, name: &str) -> Option<wl_output::WlOutput> {
-        self.screens.iter().map(|s| s.out.clone()).find(|o| self.output_state.info(o).and_then(|i| i.name).as_deref() == Some(name))
+        self.screens.iter().map(|s| s.out.clone()).find(|o| self.wl.output_state.info(o).and_then(|i| i.name).as_deref() == Some(name))
     }
 
     /// Une fenêtre devient active (script KWin, ou protocole Wayland standard ailleurs).
@@ -720,7 +728,7 @@ impl App {
     }
 
     fn current_name(&self) -> Option<String> {
-        self.current.as_ref().and_then(|o| self.output_state.info(o)).and_then(|i| i.name)
+        self.current.as_ref().and_then(|o| self.wl.output_state.info(o)).and_then(|i| i.name)
     }
 
     fn on_active_output(&mut self, name: String) {
@@ -832,8 +840,8 @@ impl App {
     fn set_interactivity(&mut self, k: KeyboardInteractivity) {
         if self.interactivity != k {
             self.interactivity = k;
-            self.layer.set_keyboard_interactivity(k);
-            self.layer.commit();
+            self.wl.layer.set_keyboard_interactivity(k);
+            self.wl.layer.commit();
         }
     }
 
@@ -1019,14 +1027,14 @@ impl App {
     fn render_inner(&mut self) {
         // L'image précédente n'est pas encore affichée : on ne l'enterre pas sous une autre
         // (sur une machine modeste, cela évite les à-coups). Garde-fou : 100 ms.
-        if self.frame_pending.is_some_and(|t| t.elapsed() < Duration::from_millis(100)) {
+        if self.wl.frame_pending.is_some_and(|t| t.elapsed() < Duration::from_millis(100)) {
             // Redessinée dès que le compositeur aura affiché la précédente.
             self.redessin_attendu = true;
             return;
         }
         // Écran éteint ou session verrouillée : le compositeur garde nos deux tampons et
         // n'appelle plus. Rien à dessiner tant que l'un d'eux n'est pas revenu.
-        if self.tampons.len() >= 2 && self.tampons.iter().all(|b| b.canvas(&mut self.pool).is_none()) {
+        if self.wl.tampons.len() >= 2 && self.wl.tampons.iter().all(|b| b.canvas(&mut self.wl.pool).is_none()) {
             self.redessin_attendu = true;
             return;
         }
@@ -1093,8 +1101,8 @@ impl App {
         let grow_needed = nw > self.sw || nh > self.sh;
         let shrink_ok = self.sw > nw + 200 || self.sh > nh + 200;
         if grow_needed || shrink_ok {
-            self.layer.set_size(nw, nh);
-            self.layer.commit();
+            self.wl.layer.set_size(nw, nh);
+            self.wl.layer.commit();
             self.resizing = true;
             return;
         }
@@ -1128,14 +1136,14 @@ impl App {
         }
         if origin != self.origin {
             self.origin = origin;
-            self.layer.set_margin(origin.1, 0, 0, origin.0);
+            self.wl.layer.set_margin(origin.1, 0, 0, origin.0);
         }
         let to_local = |p: (f32, f32)| ((p.0 - sx) * k, (p.1 - sy) * k);
 
         self.pixmap.fill(tiny_skia::Color::TRANSPARENT);
         self.chat_layout = None;
         self.bubble_layout = None;
-        let region = Region::new(&self.compositor).ok();
+        let region = Region::new(&self.wl.compositor).ok();
 
         if !cache && !self.capture {
             if let Some(t) = &self.maki.tree {
@@ -1226,7 +1234,7 @@ impl App {
                 }
             }
         }
-        let surface = self.layer.wl_surface().clone();
+        let surface = self.wl.layer.wl_surface().clone();
         if let Some(r) = &region {
             surface.set_input_region(Some(r.wl_region()));
         }
@@ -1240,8 +1248,8 @@ impl App {
             self.redessin_attendu = true;
             return;
         };
-        let buffer = &self.tampons[i];
-        let Some(canvas) = buffer.canvas(&mut self.pool) else {
+        let buffer = &self.wl.tampons[i];
+        let Some(canvas) = buffer.canvas(&mut self.wl.pool) else {
             return;
         };
         surface.set_buffer_scale(self.dpr as i32);
@@ -1253,9 +1261,9 @@ impl App {
         }
         surface.damage_buffer(0, 0, bw, bh);
         if buffer.attach_to(&surface).is_ok() {
-            surface.frame(&self.qh, surface.clone());
-            self.frame_pending = Some(Instant::now());
-            self.layer.commit();
+            surface.frame(&self.wl.qh, surface.clone());
+            self.wl.frame_pending = Some(Instant::now());
+            self.wl.layer.commit();
         }
     }
 
@@ -1264,23 +1272,23 @@ impl App {
     /// jamais garder la place d'anciennes tailles.
     fn tampon_libre(&mut self, bw: i32, bh: i32) -> Option<usize> {
         let taille = (bw as usize) * (bh as usize) * 4;
-        if self.tampons.iter().any(|b| b.height() != bh || b.stride() != bw * 4) {
-            self.tampons.clear();
+        if self.wl.tampons.iter().any(|b| b.height() != bh || b.stride() != bw * 4) {
+            self.wl.tampons.clear();
         }
-        if self.tampons.is_empty() && self.pool.len() > taille * 3 {
-            if let Ok(p) = SlotPool::new(taille * 2, &self.shm) {
-                self.pool = p;
+        if self.wl.tampons.is_empty() && self.wl.pool.len() > taille * 3 {
+            if let Ok(p) = SlotPool::new(taille * 2, &self.wl.shm) {
+                self.wl.pool = p;
             }
         }
-        if let Some(i) = self.tampons.iter().position(|b| b.canvas(&mut self.pool).is_some()) {
+        if let Some(i) = self.wl.tampons.iter().position(|b| b.canvas(&mut self.wl.pool).is_some()) {
             return Some(i);
         }
-        if self.tampons.len() >= 2 {
+        if self.wl.tampons.len() >= 2 {
             return None;
         }
-        let (b, _) = self.pool.create_buffer(bw, bh, bw * 4, wl_shm::Format::Argb8888).ok()?;
-        self.tampons.push(b);
-        Some(self.tampons.len() - 1)
+        let (b, _) = self.wl.pool.create_buffer(bw, bh, bw * 4, wl_shm::Format::Argb8888).ok()?;
+        self.wl.tampons.push(b);
+        Some(self.wl.tampons.len() - 1)
     }
 
     fn resize_pixmaps(&mut self) {
@@ -1302,8 +1310,8 @@ impl App {
     fn set_cursor(&mut self, c: CursorIcon) {
         if self.cursor != c {
             self.cursor = c;
-            if let Some(p) = &self.pointer {
-                let _ = p.set_cursor(&self.conn, c);
+            if let Some(p) = &self.wl.pointer {
+                let _ = p.set_cursor(&self.wl.conn, c);
             }
         }
     }
@@ -1520,7 +1528,7 @@ impl App {
 
 impl CompositorHandler for App {
     fn scale_factor_changed(&mut self, _: &Connection, _: &QueueHandle<Self>, surface: &wl_surface::WlSurface, f: i32) {
-        if surface == self.layer.wl_surface() {
+        if surface == self.wl.layer.wl_surface() {
             let f = f.clamp(1, 4) as u32;
             if f != self.dpr {
                 self.dpr = f;
@@ -1531,7 +1539,7 @@ impl CompositorHandler for App {
     }
     fn transform_changed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: wl_output::Transform) {}
     fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {
-        self.frame_pending = None;
+        self.wl.frame_pending = None;
         if self.redessin_attendu {
             self.render();
         }
@@ -1540,7 +1548,7 @@ impl CompositorHandler for App {
         // Une surface layer-shell appartient à l'écran pour lequel elle est créée (move_to).
         // Elle peut « toucher » l'écran voisin quand elle grandit jusqu'au bord (bulle
         // ouverte) : ce n'est pas un changement d'écran, sinon il prendrait le sol de l'autre.
-        if surface == self.layer.wl_surface() && self.current.is_none() {
+        if surface == self.wl.layer.wl_surface() && self.current.is_none() {
             self.current = Some(o.clone());
         }
     }
@@ -1549,16 +1557,16 @@ impl CompositorHandler for App {
 
 impl OutputHandler for App {
     fn output_state(&mut self) -> &mut OutputState {
-        &mut self.output_state
+        &mut self.wl.output_state
     }
     fn new_output(&mut self, _: &Connection, qh: &QueueHandle<Self>, o: wl_output::WlOutput) {
         // Sonde invisible : couvre la zone utile de cet écran (hors panneaux).
-        let probe = self.layer_shell.create_layer_surface(qh, self.compositor.create_surface(qh), Layer::Background, Some("lkatta-zone"), Some(&o));
+        let probe = self.wl.layer_shell.create_layer_surface(qh, self.wl.compositor.create_surface(qh), Layer::Background, Some("lkatta-zone"), Some(&o));
         probe.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
         probe.set_size(0, 0);
         probe.set_exclusive_zone(0);
         probe.set_keyboard_interactivity(KeyboardInteractivity::None);
-        if let Ok(r) = Region::new(&self.compositor) {
+        if let Ok(r) = Region::new(&self.wl.compositor) {
             probe.wl_surface().set_input_region(Some(r.wl_region()));
         }
         probe.commit();
@@ -1578,7 +1586,7 @@ impl OutputHandler for App {
 
 impl LayerShellHandler for App {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, l: &LayerSurface) {
-        if l == &self.layer {
+        if l == &self.wl.layer {
             self.exit = true;
         }
     }
@@ -1593,7 +1601,7 @@ impl LayerShellHandler for App {
             }
             return;
         }
-        if l != &self.layer {
+        if l != &self.wl.layer {
             return;
         }
         if c.new_size.0 > 0 && c.new_size.1 > 0 && (c.new_size.0, c.new_size.1) != (self.sw, self.sh) {
@@ -1611,30 +1619,31 @@ impl LayerShellHandler for App {
 
 impl SeatHandler for App {
     fn seat_state(&mut self) -> &mut SeatState {
-        &mut self.seat_state
+        &mut self.wl.seat_state
     }
     fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
     fn new_capability(&mut self, _: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat, cap: Capability) {
-        if self.seat.is_none() {
-            self.seat = Some(seat.clone());
+        if self.wl.seat.is_none() {
+            self.wl.seat = Some(seat.clone());
         }
-        if cap == Capability::Pointer && self.dnd_device.is_none() {
-            if let Some(m) = &self.dnd_manager {
-                self.dnd_device = Some(m.get_data_device(qh, &seat));
+        if cap == Capability::Pointer && self.wl.dnd_device.is_none() {
+            if let Some(m) = &self.wl.dnd_manager {
+                self.wl.dnd_device = Some(m.get_data_device(qh, &seat));
             }
         }
-        if cap == Capability::Pointer && self.pointer.is_none() {
-            let surface = self.compositor.create_surface(qh);
-            self.pointer = self.seat_state.get_pointer_with_theme(qh, &seat, self.shm.wl_shm(), surface, ThemeSpec::default()).ok();
+        if cap == Capability::Pointer && self.wl.pointer.is_none() {
+            let surface = self.wl.compositor.create_surface(qh);
+            self.wl.pointer = self.wl.seat_state.get_pointer_with_theme(qh, &seat, self.wl.shm.wl_shm(), surface, ThemeSpec::default()).ok();
         }
         // Absence : prévenu après 5 minutes sans clavier ni souris.
-        if self.idle.is_none() {
-            if let Some(n) = &self.idle_notifier {
-                self.idle = Some(n.get_idle_notification(5 * 60 * 1000, &seat, qh, ()));
+        if self.wl.idle.is_none() {
+            if let Some(n) = &self.wl.idle_notifier {
+                self.wl.idle = Some(n.get_idle_notification(5 * 60 * 1000, &seat, qh, ()));
             }
         }
-        if cap == Capability::Keyboard && self.keyboard.is_none() {
-            self.keyboard = self
+        if cap == Capability::Keyboard && self.wl.keyboard.is_none() {
+            self.wl.keyboard = self
+                .wl
                 .seat_state
                 .get_keyboard_with_repeat(qh, &seat, None, self.loop_handle.clone(), Box::new(|app: &mut App, _, ev| app.on_key(ev)))
                 .ok();
@@ -1642,12 +1651,12 @@ impl SeatHandler for App {
     }
     fn remove_capability(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat, cap: Capability) {
         if cap == Capability::Pointer {
-            if let Some(p) = self.pointer.take() {
+            if let Some(p) = self.wl.pointer.take() {
                 p.pointer().release();
             }
         }
         if cap == Capability::Keyboard {
-            if let Some(k) = self.keyboard.take() {
+            if let Some(k) = self.wl.keyboard.take() {
                 k.release();
             }
         }
@@ -1657,13 +1666,13 @@ impl SeatHandler for App {
 
 impl KeyboardHandler for App {
     fn enter(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_keyboard::WlKeyboard, surface: &wl_surface::WlSurface, _: u32, _: &[u32], _: &[Keysym]) {
-        if surface == self.layer.wl_surface() {
+        if surface == self.wl.layer.wl_surface() {
             self.kb_focus = true;
             self.chat.retour_attendu = false;
         }
     }
     fn leave(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_keyboard::WlKeyboard, surface: &wl_surface::WlSurface, _: u32) {
-        if surface == self.layer.wl_surface() {
+        if surface == self.wl.layer.wl_surface() {
             self.kb_focus = false;
             // Clic ailleurs (autre fenêtre, bureau) : la bulle se referme.
             if self.chat.fermable() {
@@ -1688,7 +1697,7 @@ impl PointerHandler for App {
     fn pointer_frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_pointer::WlPointer, events: &[PointerEvent]) {
         let mut redessiner = false;
         for ev in events {
-            if &ev.surface != self.layer.wl_surface() {
+            if &ev.surface != self.wl.layer.wl_surface() {
                 continue;
             }
             let local = (ev.position.0 as f32, ev.position.1 as f32);
@@ -1812,13 +1821,13 @@ impl PointerHandler for App {
 
 impl ShmHandler for App {
     fn shm_state(&mut self) -> &mut Shm {
-        &mut self.shm
+        &mut self.wl.shm
     }
 }
 
 impl ProvidesRegistryState for App {
     fn registry(&mut self) -> &mut RegistryState {
-        &mut self.registry_state
+        &mut self.wl.registry_state
     }
     registry_handlers![OutputState, SeatState];
 }
@@ -1854,8 +1863,8 @@ const URI_LIST: &str = "text/uri-list";
 
 impl App {
     fn offre_glissee(&self, dev: &WlDataDevice) -> Option<DragOffer> {
-        let d = self.dnd_device.as_ref().filter(|d| d.inner() == dev)?;
-        d.data().drag_offer().filter(|o| &o.surface == self.layer.wl_surface())
+        let d = self.wl.dnd_device.as_ref().filter(|d| d.inner() == dev)?;
+        d.data().drag_offer().filter(|o| &o.surface == self.wl.layer.wl_surface())
     }
 
     /// Fichiers lâchés : joints à la prochaine question, bulle ouverte, saisie prête.
@@ -1979,9 +1988,9 @@ impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for App {
             zwlr_foreign_toplevel_manager_v1::Event::Toplevel { toplevel } => {
                 crate::toplevels::marquer_disponible();
                 let id = wayland_client::Proxy::id(&toplevel).protocol_id();
-                app.toplevels.insert(id, (toplevel, crate::toplevels::Fenetre { id, ..Default::default() }, None));
+                app.wl.toplevels.insert(id, (toplevel, crate::toplevels::Fenetre { id, ..Default::default() }, None));
             }
-            zwlr_foreign_toplevel_manager_v1::Event::Finished => app.toplevel_mgr = None,
+            zwlr_foreign_toplevel_manager_v1::Event::Finished => app.wl.toplevel_mgr = None,
             _ => {}
         }
     }
@@ -1995,7 +2004,7 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for App {
     fn event(app: &mut Self, h: &ZwlrForeignToplevelHandleV1, ev: zwlr_foreign_toplevel_handle_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         use zwlr_foreign_toplevel_handle_v1::Event as E;
         let id = wayland_client::Proxy::id(h).protocol_id();
-        let Some((_, f, sortie)) = app.toplevels.get_mut(&id) else { return };
+        let Some((_, f, sortie)) = app.wl.toplevels.get_mut(&id) else { return };
         match ev {
             E::Title { title } => f.titre = title,
             E::AppId { app_id } => f.classe = app_id,
@@ -2011,7 +2020,7 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for App {
                 }
                 crate::toplevels::mettre_a_jour(id, Some(f.clone()));
                 if f.active {
-                    let ecran = sortie.and_then(|o| app.output_state.info(&o)).and_then(|i| i.name).unwrap_or_default();
+                    let ecran = sortie.and_then(|o| app.wl.output_state.info(&o)).and_then(|i| i.name).unwrap_or_default();
                     // Pas de géométrie dans ce protocole : rectangle vide (il n'évite pas la
                     // fenêtre et n'y grimpe pas, mais se cache en plein écran et se tait en visio).
                     app.on_fenetre(crate::bureau::Fenetre { plein_ecran: f.plein_ecran, rect: (0.0, 0.0, 0.0, 0.0), classe: f.classe, titre: f.titre, ecran });
@@ -2019,7 +2028,7 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for App {
             }
             E::Closed => {
                 crate::toplevels::mettre_a_jour(id, None);
-                if let Some((h, _, _)) = app.toplevels.remove(&id) {
+                if let Some((h, _, _)) = app.wl.toplevels.remove(&id) {
                     h.destroy();
                 }
             }
@@ -2032,11 +2041,11 @@ impl App {
     /// Actions demandées par les outils (autres fils) sur les fenêtres du protocole standard.
     fn actions_fenetres(&mut self) {
         for (id, a) in crate::toplevels::prendre_actions() {
-            let Some((h, f, _)) = self.toplevels.get(&id) else { continue };
+            let Some((h, f, _)) = self.wl.toplevels.get(&id) else { continue };
             use crate::toplevels::Action;
             match a {
                 Action::Activer => {
-                    if let Some(s) = &self.seat {
+                    if let Some(s) = &self.wl.seat {
                         h.activate(s);
                     }
                 }
