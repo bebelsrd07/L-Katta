@@ -162,8 +162,10 @@ Une application généraliste qui s'adapte à chaque utilisateur. Ordre recomman
    de tout, zones cliquables découpées ; même maki, mêmes bulles. Architecture retenue :
    - `behavior.rs` (comportement) et `draw.rs` (dessin tiny-skia) servent tels quels ;
    - a. ✔ prototype `src/mascot/x11.rs` (x11rb) : fenêtre ARGB override-redirect au-dessus de
-     tout, entrée limitée au maki (extension SHAPE), maki animé, clic ; essai `lkatta x11-essai`
-     dans un KWin virtuel avec Xwayland (0.2.7) ;
+     tout, entrée limitée au maki (extension SHAPE), maki animé ; `lkatta x11-essai` vérifié
+     dans un KWin virtuel avec Xwayland (fenêtre visible, transparente, zone cliquable posée).
+     Reste à vérifier sur un vrai bureau X11 : réception des clics (Xwayland refuse les clics
+     simulés sans portail) ;
    - b. séparer `mascot/mod.rs` en une **scène** commune (tick, rendu dans un Pixmap, clics et
      touches abstraits, bulles, discussion) et un **affichage** (Wayland layer-shell / X11) ;
    - c. affichage X11 complet : écrans (RandR), clavier pour la bulle (fenêtre qui prend le

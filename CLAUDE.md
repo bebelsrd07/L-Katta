@@ -53,3 +53,6 @@
 - Hors KDE : fenêtres par wlr-foreign-toplevel (src/toplevels.rs ; écouteur dans mascot/mod.rs,
   actions déposées par les outils et exécutées au tick), hyprctl et swaymsg en priorité.
   Environnement détecté : src/environnement.rs (environnement.toml).
+- X11 (en cours, docs/TODO.md §3) : src/mascot/x11.rs. Essai : un script qui lance
+  `lkatta x11-essai --capture x.png --duree 4`, passé SEUL à `kwin_wayland --virtual --xwayland`
+  (kwin lance chaque argument après les options comme un programme séparé).
