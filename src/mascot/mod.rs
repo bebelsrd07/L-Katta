@@ -78,11 +78,23 @@ struct Press {
     on_maki: bool,
 }
 
-/// Un écran et sa sonde (mesure de la zone utile).
+/// Un écran, quel que soit l'affichage : sortie Wayland, ou écran X11 (RandR, numéro).
+#[derive(Debug, Clone, PartialEq)]
+enum Sortie {
+    Wl(wl_output::WlOutput),
+    #[allow(dead_code)]
+    X(u32),
+}
+
+/// Un écran et sa sonde (mesure de la zone utile, sous Wayland).
 struct Screen {
-    out: wl_output::WlOutput,
-    probe: LayerSurface,
+    out: Sortie,
+    probe: Option<LayerSurface>,
     area: Option<(f32, f32)>,
+    /// Position et taille logiques (X11 ; sous Wayland, lues à jour dans OutputState).
+    geom: Option<(f32, f32, f32, f32)>,
+    /// Nom de l'écran (X11 ; sous Wayland, lu dans OutputState).
+    nom: String,
 }
 
 fn make_main(shell: &LayerShell, comp: &CompositorState, qh: &QueueHandle<App>, out: Option<&wl_output::WlOutput>, sw: u32, sh: u32, k: KeyboardInteractivity) -> LayerSurface {
@@ -99,10 +111,10 @@ struct App {
     /// Tout ce qui est propre à Wayland (surfaces, tampons, sièges, protocoles).
     wl: Wl,
     screens: Vec<Screen>,
-    current: Option<wl_output::WlOutput>,
+    current: Option<Sortie>,
     /// Bureau virtuel courant et place du maki sur chaque bureau (écran, x).
     desktop: String,
-    desk_pos: std::collections::HashMap<String, (Option<wl_output::WlOutput>, f32)>,
+    desk_pos: std::collections::HashMap<String, (Option<Sortie>, f32)>,
     loop_handle: LoopHandle<'static, App>,
     kb_focus: bool,
     ctrl: bool,
@@ -169,7 +181,7 @@ struct App {
     /// Écran actif selon KWin et depuis quand.
     active_out: Option<(String, Instant)>,
     /// Écran où il doit réapparaître après son nuage.
-    pending_out: Option<(wl_output::WlOutput, bool)>,
+    pending_out: Option<(Sortie, bool)>,
     /// Le pointeur a quitté la surface pendant qu'on le tenait (vers un autre écran ?).
     drag_left: Option<Instant>,
     /// Mesure du temps de rendu (LKATTA_PERF=1) : (images, secondes).
@@ -374,15 +386,28 @@ pub fn run(cfg: Config, rx: Channel<Msg>) -> Result<(), String> {
 }
 
 impl App {
-    fn geom(&self, o: &wl_output::WlOutput) -> Option<(f32, f32, f32, f32)> {
-        let i = self.wl.output_state.info(o)?;
-        let (x, y) = i.logical_position?;
-        let (w, h) = i.logical_size?;
-        Some((x as f32, y as f32, w as f32, h as f32))
+    fn geom(&self, o: &Sortie) -> Option<(f32, f32, f32, f32)> {
+        match o {
+            Sortie::Wl(w) => {
+                let i = self.wl.output_state.info(w)?;
+                let (x, y) = i.logical_position?;
+                let (lw, lh) = i.logical_size?;
+                Some((x as f32, y as f32, lw as f32, lh as f32))
+            }
+            Sortie::X(_) => self.screens.iter().find(|s| &s.out == o).and_then(|s| s.geom),
+        }
+    }
+
+    /// Nom d'un écran (« HDMI-A-1 », « eDP-1 »).
+    fn nom_de(&self, o: &Sortie) -> Option<String> {
+        match o {
+            Sortie::Wl(w) => self.wl.output_state.info(w).and_then(|i| i.name),
+            Sortie::X(_) => self.screens.iter().find(|s| &s.out == o).map(|s| s.nom.clone()).filter(|n| !n.is_empty()),
+        }
     }
 
     /// Écran voisin dans une direction (bords jointifs qui se recouvrent).
-    fn neighbor(&self, e: behavior::Exit) -> Option<wl_output::WlOutput> {
+    fn neighbor(&self, e: behavior::Exit) -> Option<Sortie> {
         use behavior::Exit;
         let cur = self.current.as_ref()?;
         let (x, y, w, h) = self.geom(cur)?;
@@ -413,9 +438,11 @@ impl App {
     }
 
     /// Déplace la surface du maki sur un autre écran.
-    fn move_to(&mut self, o: wl_output::WlOutput) {
+    fn move_to(&mut self, o: Sortie) {
         let k = if self.chat.open { KeyboardInteractivity::OnDemand } else { KeyboardInteractivity::None };
-        self.wl.layer = make_main(&self.wl.layer_shell, &self.wl.compositor, &self.wl.qh, Some(&o), self.sw, self.sh, k);
+        if let Sortie::Wl(w) = &o {
+            self.wl.layer = make_main(&self.wl.layer_shell, &self.wl.compositor, &self.wl.qh, Some(w), self.sw, self.sh, k);
+        }
         // Nouvelle surface : tampons neufs (l'ancienne surface rend les siens en disparaissant).
         self.wl.tampons.clear();
         self.interactivity = k;
@@ -704,8 +731,8 @@ impl App {
         }
     }
 
-    fn output_named(&self, name: &str) -> Option<wl_output::WlOutput> {
-        self.screens.iter().map(|s| s.out.clone()).find(|o| self.wl.output_state.info(o).and_then(|i| i.name).as_deref() == Some(name))
+    fn output_named(&self, name: &str) -> Option<Sortie> {
+        self.screens.iter().map(|s| s.out.clone()).find(|o| self.nom_de(o).as_deref() == Some(name))
     }
 
     /// Une fenêtre devient active (script KWin, ou protocole Wayland standard ailleurs).
@@ -728,7 +755,7 @@ impl App {
     }
 
     fn current_name(&self) -> Option<String> {
-        self.current.as_ref().and_then(|o| self.wl.output_state.info(o)).and_then(|i| i.name)
+        self.current.as_ref().and_then(|o| self.nom_de(o))
     }
 
     fn on_active_output(&mut self, name: String) {
@@ -1549,7 +1576,7 @@ impl CompositorHandler for App {
         // Elle peut « toucher » l'écran voisin quand elle grandit jusqu'au bord (bulle
         // ouverte) : ce n'est pas un changement d'écran, sinon il prendrait le sol de l'autre.
         if surface == self.wl.layer.wl_surface() && self.current.is_none() {
-            self.current = Some(o.clone());
+            self.current = Some(Sortie::Wl(o.clone()));
         }
     }
     fn surface_leave(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: &wl_output::WlOutput) {}
@@ -1570,10 +1597,11 @@ impl OutputHandler for App {
             probe.wl_surface().set_input_region(Some(r.wl_region()));
         }
         probe.commit();
-        self.screens.push(Screen { out: o, probe, area: None });
+        self.screens.push(Screen { out: Sortie::Wl(o), probe: Some(probe), area: None, geom: None, nom: String::new() });
     }
     fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
     fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, o: wl_output::WlOutput) {
+        let o = Sortie::Wl(o);
         self.screens.retain(|s| s.out != o);
         if self.current.as_ref() == Some(&o) {
             if let Some(other) = self.screens.first().map(|s| s.out.clone()) {
@@ -1592,7 +1620,7 @@ impl LayerShellHandler for App {
     }
 
     fn configure(&mut self, _: &Connection, _: &QueueHandle<Self>, l: &LayerSurface, c: LayerSurfaceConfigure, _: u32) {
-        if let Some(scr) = self.screens.iter_mut().find(|s| &s.probe == l) {
+        if let Some(scr) = self.screens.iter_mut().find(|s| s.probe.as_ref() == Some(l)) {
             if c.new_size.0 > 0 && c.new_size.1 > 0 {
                 scr.area = Some((c.new_size.0 as f32, c.new_size.1 as f32));
                 if self.area.is_none() {
