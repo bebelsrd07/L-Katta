@@ -109,7 +109,7 @@ fn make_main(shell: &LayerShell, comp: &CompositorState, qh: &QueueHandle<App>, 
 
 struct App {
     /// Tout ce qui est propre à Wayland (surfaces, tampons, sièges, protocoles).
-    wl: Wl,
+    wl: Option<Wl>,
     screens: Vec<Screen>,
     current: Option<Sortie>,
     /// Bureau virtuel courant et place du maki sur chaque bureau (écran, x).
@@ -261,7 +261,7 @@ pub fn run(cfg: Config, rx: Channel<Msg>) -> Result<(), String> {
     let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(7);
 
     let mut app = App {
-        wl: Wl {
+        wl: Some(Wl {
             conn: conn.clone(),
             registry_state: RegistryState::new(&globals),
             seat_state: SeatState::new(&globals, &qh),
@@ -288,7 +288,7 @@ pub fn run(cfg: Config, rx: Channel<Msg>) -> Result<(), String> {
             toplevels: Default::default(),
             seat: None,
             idle: None,
-        },
+        }),
         screens: vec![],
         current: None,
         desktop: crate::kde::current().unwrap_or_default(),
@@ -389,7 +389,7 @@ impl App {
     fn geom(&self, o: &Sortie) -> Option<(f32, f32, f32, f32)> {
         match o {
             Sortie::Wl(w) => {
-                let i = self.wl.output_state.info(w)?;
+                let i = self.wl.as_ref()?.output_state.info(w)?;
                 let (x, y) = i.logical_position?;
                 let (lw, lh) = i.logical_size?;
                 Some((x as f32, y as f32, lw as f32, lh as f32))
@@ -401,7 +401,7 @@ impl App {
     /// Nom d'un écran (« HDMI-A-1 », « eDP-1 »).
     fn nom_de(&self, o: &Sortie) -> Option<String> {
         match o {
-            Sortie::Wl(w) => self.wl.output_state.info(w).and_then(|i| i.name),
+            Sortie::Wl(w) => self.wl.as_ref()?.output_state.info(w).and_then(|i| i.name),
             Sortie::X(_) => self.screens.iter().find(|s| &s.out == o).map(|s| s.nom.clone()).filter(|n| !n.is_empty()),
         }
     }
@@ -441,14 +441,16 @@ impl App {
     fn move_to(&mut self, o: Sortie) {
         let k = if self.chat.open { KeyboardInteractivity::OnDemand } else { KeyboardInteractivity::None };
         if let Sortie::Wl(w) = &o {
-            self.wl.layer = make_main(&self.wl.layer_shell, &self.wl.compositor, &self.wl.qh, Some(w), self.sw, self.sh, k);
+            if let Some(wl) = self.wl.as_mut() {
+                wl.layer = make_main(&wl.layer_shell, &wl.compositor, &wl.qh, Some(w), self.sw, self.sh, k);
+            }
         }
         // Nouvelle surface : tampons neufs (l'ancienne surface rend les siens en disparaissant).
-        self.wl.tampons.clear();
+        self.wl.as_mut().unwrap().tampons.clear();
         self.interactivity = k;
         self.configured = false;
         self.configured_once = false;
-        self.wl.frame_pending = None;
+        self.wl.as_mut().unwrap().frame_pending = None;
         self.origin = (0, 0);
         self.kb_focus = false;
         self.current = Some(o);
@@ -457,13 +459,12 @@ impl App {
     fn area(&self) -> (f32, f32) {
         let cur = self.current.as_ref().and_then(|c| self.screens.iter().find(|s| &s.out == c)).and_then(|s| s.area);
         cur.or(self.area).unwrap_or_else(|| {
-            self.wl.output_state
-                .outputs()
-                .next()
-                .and_then(|o| self.wl.output_state.info(&o))
-                .and_then(|i| i.logical_size)
-                .map(|(w, h)| (w as f32, h as f32))
-                .unwrap_or((1920.0, 1080.0))
+            let premier = self.screens.first().and_then(|s| self.geom(&s.out)).map(|g| (g.2, g.3));
+            premier.or_else(|| {
+                let wl = self.wl.as_ref()?;
+                wl.output_state.outputs().next().and_then(|o| wl.output_state.info(&o)).and_then(|i| i.logical_size).map(|(w, h)| (w as f32, h as f32))
+            })
+            .unwrap_or((1920.0, 1080.0))
         })
     }
 
@@ -867,8 +868,8 @@ impl App {
     fn set_interactivity(&mut self, k: KeyboardInteractivity) {
         if self.interactivity != k {
             self.interactivity = k;
-            self.wl.layer.set_keyboard_interactivity(k);
-            self.wl.layer.commit();
+            self.wl.as_mut().unwrap().layer.set_keyboard_interactivity(k);
+            self.wl.as_mut().unwrap().layer.commit();
         }
     }
 
@@ -1054,14 +1055,14 @@ impl App {
     fn render_inner(&mut self) {
         // L'image précédente n'est pas encore affichée : on ne l'enterre pas sous une autre
         // (sur une machine modeste, cela évite les à-coups). Garde-fou : 100 ms.
-        if self.wl.frame_pending.is_some_and(|t| t.elapsed() < Duration::from_millis(100)) {
+        if self.wl.as_mut().unwrap().frame_pending.is_some_and(|t| t.elapsed() < Duration::from_millis(100)) {
             // Redessinée dès que le compositeur aura affiché la précédente.
             self.redessin_attendu = true;
             return;
         }
         // Écran éteint ou session verrouillée : le compositeur garde nos deux tampons et
         // n'appelle plus. Rien à dessiner tant que l'un d'eux n'est pas revenu.
-        if self.wl.tampons.len() >= 2 && self.wl.tampons.iter().all(|b| b.canvas(&mut self.wl.pool).is_none()) {
+        if self.wl.as_mut().is_some_and(|wl| wl.tampons.len() >= 2 && wl.tampons.iter().all(|b| b.canvas(&mut wl.pool).is_none())) {
             self.redessin_attendu = true;
             return;
         }
@@ -1128,8 +1129,8 @@ impl App {
         let grow_needed = nw > self.sw || nh > self.sh;
         let shrink_ok = self.sw > nw + 200 || self.sh > nh + 200;
         if grow_needed || shrink_ok {
-            self.wl.layer.set_size(nw, nh);
-            self.wl.layer.commit();
+            self.wl.as_mut().unwrap().layer.set_size(nw, nh);
+            self.wl.as_mut().unwrap().layer.commit();
             self.resizing = true;
             return;
         }
@@ -1163,14 +1164,14 @@ impl App {
         }
         if origin != self.origin {
             self.origin = origin;
-            self.wl.layer.set_margin(origin.1, 0, 0, origin.0);
+            self.wl.as_mut().unwrap().layer.set_margin(origin.1, 0, 0, origin.0);
         }
         let to_local = |p: (f32, f32)| ((p.0 - sx) * k, (p.1 - sy) * k);
 
         self.pixmap.fill(tiny_skia::Color::TRANSPARENT);
         self.chat_layout = None;
         self.bubble_layout = None;
-        let region = Region::new(&self.wl.compositor).ok();
+        let region = Region::new(&self.wl.as_mut().unwrap().compositor).ok();
 
         if !cache && !self.capture {
             if let Some(t) = &self.maki.tree {
@@ -1261,7 +1262,7 @@ impl App {
                 }
             }
         }
-        let surface = self.wl.layer.wl_surface().clone();
+        let surface = self.wl.as_mut().unwrap().layer.wl_surface().clone();
         if let Some(r) = &region {
             surface.set_input_region(Some(r.wl_region()));
         }
@@ -1275,8 +1276,9 @@ impl App {
             self.redessin_attendu = true;
             return;
         };
-        let buffer = &self.wl.tampons[i];
-        let Some(canvas) = buffer.canvas(&mut self.wl.pool) else {
+        let Some(wl) = self.wl.as_mut() else { return };
+        let buffer = &wl.tampons[i];
+        let Some(canvas) = buffer.canvas(&mut wl.pool) else {
             return;
         };
         surface.set_buffer_scale(self.dpr as i32);
@@ -1288,9 +1290,9 @@ impl App {
         }
         surface.damage_buffer(0, 0, bw, bh);
         if buffer.attach_to(&surface).is_ok() {
-            surface.frame(&self.wl.qh, surface.clone());
-            self.wl.frame_pending = Some(Instant::now());
-            self.wl.layer.commit();
+            surface.frame(&self.wl.as_mut().unwrap().qh, surface.clone());
+            self.wl.as_mut().unwrap().frame_pending = Some(Instant::now());
+            self.wl.as_mut().unwrap().layer.commit();
         }
     }
 
@@ -1299,23 +1301,24 @@ impl App {
     /// jamais garder la place d'anciennes tailles.
     fn tampon_libre(&mut self, bw: i32, bh: i32) -> Option<usize> {
         let taille = (bw as usize) * (bh as usize) * 4;
-        if self.wl.tampons.iter().any(|b| b.height() != bh || b.stride() != bw * 4) {
-            self.wl.tampons.clear();
+        if self.wl.as_mut().unwrap().tampons.iter().any(|b| b.height() != bh || b.stride() != bw * 4) {
+            self.wl.as_mut().unwrap().tampons.clear();
         }
-        if self.wl.tampons.is_empty() && self.wl.pool.len() > taille * 3 {
-            if let Ok(p) = SlotPool::new(taille * 2, &self.wl.shm) {
-                self.wl.pool = p;
+        if self.wl.as_mut().unwrap().tampons.is_empty() && self.wl.as_mut().unwrap().pool.len() > taille * 3 {
+            if let Ok(p) = SlotPool::new(taille * 2, &self.wl.as_mut().unwrap().shm) {
+                self.wl.as_mut().unwrap().pool = p;
             }
         }
-        if let Some(i) = self.wl.tampons.iter().position(|b| b.canvas(&mut self.wl.pool).is_some()) {
+        let wl = self.wl.as_mut()?;
+        if let Some(i) = wl.tampons.iter().position(|b| b.canvas(&mut wl.pool).is_some()) {
             return Some(i);
         }
-        if self.wl.tampons.len() >= 2 {
+        if self.wl.as_mut().unwrap().tampons.len() >= 2 {
             return None;
         }
-        let (b, _) = self.wl.pool.create_buffer(bw, bh, bw * 4, wl_shm::Format::Argb8888).ok()?;
-        self.wl.tampons.push(b);
-        Some(self.wl.tampons.len() - 1)
+        let (b, _) = self.wl.as_mut().unwrap().pool.create_buffer(bw, bh, bw * 4, wl_shm::Format::Argb8888).ok()?;
+        self.wl.as_mut().unwrap().tampons.push(b);
+        Some(self.wl.as_mut().unwrap().tampons.len() - 1)
     }
 
     fn resize_pixmaps(&mut self) {
@@ -1337,8 +1340,10 @@ impl App {
     fn set_cursor(&mut self, c: CursorIcon) {
         if self.cursor != c {
             self.cursor = c;
-            if let Some(p) = &self.wl.pointer {
-                let _ = p.set_cursor(&self.wl.conn, c);
+            if let Some(wl) = self.wl.as_ref() {
+                if let Some(p) = &wl.pointer {
+                    let _ = p.set_cursor(&wl.conn, c);
+                }
             }
         }
     }
@@ -1555,7 +1560,7 @@ impl App {
 
 impl CompositorHandler for App {
     fn scale_factor_changed(&mut self, _: &Connection, _: &QueueHandle<Self>, surface: &wl_surface::WlSurface, f: i32) {
-        if surface == self.wl.layer.wl_surface() {
+        if surface == self.wl.as_mut().unwrap().layer.wl_surface() {
             let f = f.clamp(1, 4) as u32;
             if f != self.dpr {
                 self.dpr = f;
@@ -1566,7 +1571,7 @@ impl CompositorHandler for App {
     }
     fn transform_changed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: wl_output::Transform) {}
     fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {
-        self.wl.frame_pending = None;
+        self.wl.as_mut().unwrap().frame_pending = None;
         if self.redessin_attendu {
             self.render();
         }
@@ -1575,7 +1580,7 @@ impl CompositorHandler for App {
         // Une surface layer-shell appartient à l'écran pour lequel elle est créée (move_to).
         // Elle peut « toucher » l'écran voisin quand elle grandit jusqu'au bord (bulle
         // ouverte) : ce n'est pas un changement d'écran, sinon il prendrait le sol de l'autre.
-        if surface == self.wl.layer.wl_surface() && self.current.is_none() {
+        if surface == self.wl.as_mut().unwrap().layer.wl_surface() && self.current.is_none() {
             self.current = Some(Sortie::Wl(o.clone()));
         }
     }
@@ -1584,16 +1589,17 @@ impl CompositorHandler for App {
 
 impl OutputHandler for App {
     fn output_state(&mut self) -> &mut OutputState {
-        &mut self.wl.output_state
+        &mut self.wl.as_mut().unwrap().output_state
     }
     fn new_output(&mut self, _: &Connection, qh: &QueueHandle<Self>, o: wl_output::WlOutput) {
         // Sonde invisible : couvre la zone utile de cet écran (hors panneaux).
-        let probe = self.wl.layer_shell.create_layer_surface(qh, self.wl.compositor.create_surface(qh), Layer::Background, Some("lkatta-zone"), Some(&o));
+        let Some(wl) = self.wl.as_ref() else { return };
+        let probe = wl.layer_shell.create_layer_surface(qh, wl.compositor.create_surface(qh), Layer::Background, Some("lkatta-zone"), Some(&o));
         probe.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
         probe.set_size(0, 0);
         probe.set_exclusive_zone(0);
         probe.set_keyboard_interactivity(KeyboardInteractivity::None);
-        if let Ok(r) = Region::new(&self.wl.compositor) {
+        if let Ok(r) = Region::new(&self.wl.as_mut().unwrap().compositor) {
             probe.wl_surface().set_input_region(Some(r.wl_region()));
         }
         probe.commit();
@@ -1614,7 +1620,7 @@ impl OutputHandler for App {
 
 impl LayerShellHandler for App {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, l: &LayerSurface) {
-        if l == &self.wl.layer {
+        if l == &self.wl.as_mut().unwrap().layer {
             self.exit = true;
         }
     }
@@ -1629,7 +1635,7 @@ impl LayerShellHandler for App {
             }
             return;
         }
-        if l != &self.wl.layer {
+        if l != &self.wl.as_mut().unwrap().layer {
             return;
         }
         if c.new_size.0 > 0 && c.new_size.1 > 0 && (c.new_size.0, c.new_size.1) != (self.sw, self.sh) {
@@ -1647,44 +1653,42 @@ impl LayerShellHandler for App {
 
 impl SeatHandler for App {
     fn seat_state(&mut self) -> &mut SeatState {
-        &mut self.wl.seat_state
+        &mut self.wl.as_mut().unwrap().seat_state
     }
     fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
     fn new_capability(&mut self, _: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat, cap: Capability) {
-        if self.wl.seat.is_none() {
-            self.wl.seat = Some(seat.clone());
+        let lh = self.loop_handle.clone();
+        let Some(wl) = self.wl.as_mut() else { return };
+        if wl.seat.is_none() {
+            wl.seat = Some(seat.clone());
         }
-        if cap == Capability::Pointer && self.wl.dnd_device.is_none() {
-            if let Some(m) = &self.wl.dnd_manager {
-                self.wl.dnd_device = Some(m.get_data_device(qh, &seat));
+        if cap == Capability::Pointer && wl.dnd_device.is_none() {
+            if let Some(m) = &wl.dnd_manager {
+                wl.dnd_device = Some(m.get_data_device(qh, &seat));
             }
         }
-        if cap == Capability::Pointer && self.wl.pointer.is_none() {
-            let surface = self.wl.compositor.create_surface(qh);
-            self.wl.pointer = self.wl.seat_state.get_pointer_with_theme(qh, &seat, self.wl.shm.wl_shm(), surface, ThemeSpec::default()).ok();
+        if cap == Capability::Pointer && wl.pointer.is_none() {
+            let surface = wl.compositor.create_surface(qh);
+            wl.pointer = wl.seat_state.get_pointer_with_theme(qh, &seat, wl.shm.wl_shm(), surface, ThemeSpec::default()).ok();
         }
         // Absence : prévenu après 5 minutes sans clavier ni souris.
-        if self.wl.idle.is_none() {
-            if let Some(n) = &self.wl.idle_notifier {
-                self.wl.idle = Some(n.get_idle_notification(5 * 60 * 1000, &seat, qh, ()));
+        if wl.idle.is_none() {
+            if let Some(n) = &wl.idle_notifier {
+                wl.idle = Some(n.get_idle_notification(5 * 60 * 1000, &seat, qh, ()));
             }
         }
-        if cap == Capability::Keyboard && self.wl.keyboard.is_none() {
-            self.wl.keyboard = self
-                .wl
-                .seat_state
-                .get_keyboard_with_repeat(qh, &seat, None, self.loop_handle.clone(), Box::new(|app: &mut App, _, ev| app.on_key(ev)))
-                .ok();
+        if cap == Capability::Keyboard && wl.keyboard.is_none() {
+            wl.keyboard = wl.seat_state.get_keyboard_with_repeat(qh, &seat, None, lh, Box::new(|app: &mut App, _, ev| app.on_key(ev))).ok();
         }
     }
     fn remove_capability(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat, cap: Capability) {
         if cap == Capability::Pointer {
-            if let Some(p) = self.wl.pointer.take() {
+            if let Some(p) = self.wl.as_mut().unwrap().pointer.take() {
                 p.pointer().release();
             }
         }
         if cap == Capability::Keyboard {
-            if let Some(k) = self.wl.keyboard.take() {
+            if let Some(k) = self.wl.as_mut().unwrap().keyboard.take() {
                 k.release();
             }
         }
@@ -1694,13 +1698,13 @@ impl SeatHandler for App {
 
 impl KeyboardHandler for App {
     fn enter(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_keyboard::WlKeyboard, surface: &wl_surface::WlSurface, _: u32, _: &[u32], _: &[Keysym]) {
-        if surface == self.wl.layer.wl_surface() {
+        if surface == self.wl.as_mut().unwrap().layer.wl_surface() {
             self.kb_focus = true;
             self.chat.retour_attendu = false;
         }
     }
     fn leave(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_keyboard::WlKeyboard, surface: &wl_surface::WlSurface, _: u32) {
-        if surface == self.wl.layer.wl_surface() {
+        if surface == self.wl.as_mut().unwrap().layer.wl_surface() {
             self.kb_focus = false;
             // Clic ailleurs (autre fenêtre, bureau) : la bulle se referme.
             if self.chat.fermable() {
@@ -1725,7 +1729,7 @@ impl PointerHandler for App {
     fn pointer_frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_pointer::WlPointer, events: &[PointerEvent]) {
         let mut redessiner = false;
         for ev in events {
-            if &ev.surface != self.wl.layer.wl_surface() {
+            if &ev.surface != self.wl.as_mut().unwrap().layer.wl_surface() {
                 continue;
             }
             let local = (ev.position.0 as f32, ev.position.1 as f32);
@@ -1849,13 +1853,13 @@ impl PointerHandler for App {
 
 impl ShmHandler for App {
     fn shm_state(&mut self) -> &mut Shm {
-        &mut self.wl.shm
+        &mut self.wl.as_mut().unwrap().shm
     }
 }
 
 impl ProvidesRegistryState for App {
     fn registry(&mut self) -> &mut RegistryState {
-        &mut self.wl.registry_state
+        &mut self.wl.as_mut().unwrap().registry_state
     }
     registry_handlers![OutputState, SeatState];
 }
@@ -1891,8 +1895,9 @@ const URI_LIST: &str = "text/uri-list";
 
 impl App {
     fn offre_glissee(&self, dev: &WlDataDevice) -> Option<DragOffer> {
-        let d = self.wl.dnd_device.as_ref().filter(|d| d.inner() == dev)?;
-        d.data().drag_offer().filter(|o| &o.surface == self.wl.layer.wl_surface())
+        let wl = self.wl.as_ref()?;
+        let d = wl.dnd_device.as_ref().filter(|d| d.inner() == dev)?;
+        d.data().drag_offer().filter(|o| &o.surface == wl.layer.wl_surface())
     }
 
     /// Fichiers lâchés : joints à la prochaine question, bulle ouverte, saisie prête.
@@ -2016,9 +2021,9 @@ impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for App {
             zwlr_foreign_toplevel_manager_v1::Event::Toplevel { toplevel } => {
                 crate::toplevels::marquer_disponible();
                 let id = wayland_client::Proxy::id(&toplevel).protocol_id();
-                app.wl.toplevels.insert(id, (toplevel, crate::toplevels::Fenetre { id, ..Default::default() }, None));
+                app.wl.as_mut().unwrap().toplevels.insert(id, (toplevel, crate::toplevels::Fenetre { id, ..Default::default() }, None));
             }
-            zwlr_foreign_toplevel_manager_v1::Event::Finished => app.wl.toplevel_mgr = None,
+            zwlr_foreign_toplevel_manager_v1::Event::Finished => app.wl.as_mut().unwrap().toplevel_mgr = None,
             _ => {}
         }
     }
@@ -2032,7 +2037,7 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for App {
     fn event(app: &mut Self, h: &ZwlrForeignToplevelHandleV1, ev: zwlr_foreign_toplevel_handle_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         use zwlr_foreign_toplevel_handle_v1::Event as E;
         let id = wayland_client::Proxy::id(h).protocol_id();
-        let Some((_, f, sortie)) = app.wl.toplevels.get_mut(&id) else { return };
+        let Some((_, f, sortie)) = app.wl.as_mut().unwrap().toplevels.get_mut(&id) else { return };
         match ev {
             E::Title { title } => f.titre = title,
             E::AppId { app_id } => f.classe = app_id,
@@ -2048,7 +2053,7 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for App {
                 }
                 crate::toplevels::mettre_a_jour(id, Some(f.clone()));
                 if f.active {
-                    let ecran = sortie.and_then(|o| app.wl.output_state.info(&o)).and_then(|i| i.name).unwrap_or_default();
+                    let ecran = sortie.and_then(|o| app.wl.as_mut().unwrap().output_state.info(&o)).and_then(|i| i.name).unwrap_or_default();
                     // Pas de géométrie dans ce protocole : rectangle vide (il n'évite pas la
                     // fenêtre et n'y grimpe pas, mais se cache en plein écran et se tait en visio).
                     app.on_fenetre(crate::bureau::Fenetre { plein_ecran: f.plein_ecran, rect: (0.0, 0.0, 0.0, 0.0), classe: f.classe, titre: f.titre, ecran });
@@ -2056,7 +2061,7 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for App {
             }
             E::Closed => {
                 crate::toplevels::mettre_a_jour(id, None);
-                if let Some((h, _, _)) = app.wl.toplevels.remove(&id) {
+                if let Some((h, _, _)) = app.wl.as_mut().unwrap().toplevels.remove(&id) {
                     h.destroy();
                 }
             }
@@ -2068,12 +2073,13 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for App {
 impl App {
     /// Actions demandées par les outils (autres fils) sur les fenêtres du protocole standard.
     fn actions_fenetres(&mut self) {
+        let Some(wl) = self.wl.as_ref() else { return };
         for (id, a) in crate::toplevels::prendre_actions() {
-            let Some((h, f, _)) = self.wl.toplevels.get(&id) else { continue };
+            let Some((h, f, _)) = wl.toplevels.get(&id) else { continue };
             use crate::toplevels::Action;
             match a {
                 Action::Activer => {
-                    if let Some(s) = &self.wl.seat {
+                    if let Some(s) = wl.seat.as_ref() {
                         h.activate(s);
                     }
                 }
