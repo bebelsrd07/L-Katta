@@ -14,6 +14,8 @@ use x11rb::protocol::Event;
 use x11rb::protocol::shape::{self, ConnectionExt as _};
 use x11rb::protocol::xproto::{self, ConnectionExt as _};
 use x11rb::wrapper::ConnectionExt as _;
+#[allow(unused_imports)]
+use x11rb::connection::RequestConnection as _;
 
 use super::behavior::{Ctx, Exits, Maki, Mode};
 use super::draw;
@@ -150,6 +152,233 @@ pub fn essai(capture: Option<&str>, duree: f32) -> Result<(), String> {
     c.destroy_window(w).map_err(|e| e.to_string())?;
     c.flush().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// --- affichage X11 du vrai maki ---------------------------------------------------------------
+
+/// Affichage X11 : une fenêtre ARGB au-dessus de tout, qui suit le contenu (maki, bulles).
+pub struct X11Aff {
+    c: x11rb::rust_connection::RustConnection,
+    win: xproto::Window,
+    gc: xproto::Gcontext,
+    taille: (u32, u32),
+    pos: (i32, i32),
+    zones: Vec<(i32, i32, i32, i32)>,
+    /// La position doit être (re)donnée au serveur (nouvel écran).
+    pub(super) a_placer: bool,
+    /// Table des touches : (premier code, symboles par touche, symboles).
+    touches: (u8, u8, Vec<u32>),
+}
+
+impl X11Aff {
+    pub(super) fn redimensionner(&mut self, w: u32, h: u32) {
+        if self.taille != (w, h) {
+            self.taille = (w, h);
+            let _ = self.c.configure_window(self.win, &xproto::ConfigureWindowAux::new().width(w).height(h));
+        }
+    }
+
+    pub(super) fn deplacer(&mut self, x: i32, y: i32) {
+        if self.pos != (x, y) || self.a_placer {
+            self.pos = (x, y);
+            self.a_placer = false;
+            let _ = self.c.configure_window(self.win, &xproto::ConfigureWindowAux::new().x(x).y(y).stack_mode(xproto::StackMode::ABOVE));
+        }
+    }
+
+    pub(super) fn zones(&mut self, z: &[(i32, i32, i32, i32)]) {
+        if self.zones == z {
+            return;
+        }
+        self.zones = z.to_vec();
+        let r: Vec<xproto::Rectangle> = z.iter().map(|z| xproto::Rectangle { x: z.0 as i16, y: z.1 as i16, width: z.2.max(0) as u16, height: z.3.max(0) as u16 }).collect();
+        let _ = self.c.shape_rectangles(shape::SO::SET, shape::SK::INPUT, xproto::ClipOrdering::UNSORTED, self.win, 0, 0, &r);
+    }
+
+    pub(super) fn presenter(&mut self, pm: &Pixmap) {
+        // Essais : LKATTA_X11_CAPTURE=fichier.png garde la dernière image envoyée.
+        if let Some(f) = std::env::var_os("LKATTA_X11_CAPTURE") {
+            let _ = pm.save_png(f);
+        }
+        let (w, h) = (pm.width() as u16, pm.height() as u16);
+        let _ = self.c.put_image(xproto::ImageFormat::Z_PIXMAP, self.win, self.gc, w, h, 0, 0, 0, 32, &vers_bgra(pm.data()));
+        let _ = self.c.flush();
+    }
+
+    /// La bulle prend le clavier (clic dans la bulle) ou le rend au reste du bureau.
+    pub(super) fn clavier(&mut self, oui: bool) {
+        let cible = if oui { self.win } else { u32::from(xproto::InputFocus::POINTER_ROOT) };
+        let _ = self.c.set_input_focus(xproto::InputFocus::POINTER_ROOT, cible, x11rb::CURRENT_TIME);
+        let _ = self.c.flush();
+    }
+
+    /// Symbole d'une touche (avec Maj ou Verr. maj : le deuxième symbole de la touche).
+    fn symbole(&self, code: u8, maj: bool) -> u32 {
+        let (premier, par, ref t) = self.touches;
+        let i = (code.saturating_sub(premier) as usize) * par as usize;
+        let base = t.get(i).copied().unwrap_or(0);
+        let haut = t.get(i + 1).copied().unwrap_or(0);
+        if maj && haut != 0 { haut } else { base }
+    }
+}
+
+/// Écrans X11 (RandR « moniteurs » : un par écran physique, nom et géométrie).
+fn ecrans(c: &impl Connection, racine: xproto::Window, larg: u16, haut: u16) -> Vec<(String, (f32, f32, f32, f32))> {
+    use x11rb::protocol::randr::ConnectionExt as _;
+    let mut v = vec![];
+    if let Ok(Ok(r)) = c.randr_get_monitors(racine, true).map(|r| r.reply()) {
+        for m in r.monitors {
+            let nom = c.get_atom_name(m.name).ok().and_then(|r| r.reply().ok()).map(|n| String::from_utf8_lossy(&n.name).into_owned()).unwrap_or_default();
+            v.push((nom, (m.x as f32, m.y as f32, m.width as f32, m.height as f32)));
+        }
+    }
+    if v.is_empty() {
+        v.push(("X11".into(), (0.0, 0.0, larg as f32, haut as f32)));
+    }
+    v
+}
+
+/// Lance le maki sur un serveur X11 (sessions XFCE, Cinnamon, MATE, i3, KDE en X11…).
+pub fn run(cfg: crate::config::Config, rx: smithay_client_toolkit::reexports::calloop::channel::Channel<crate::ipc::Msg>) -> Result<(), String> {
+    use smithay_client_toolkit::reexports::calloop::{self, EventLoop, generic::Generic, Interest, Mode as CMode, PostAction, timer::{TimeoutAction, Timer}};
+    use std::os::fd::AsFd;
+    let (c, n) = x11rb::connect(None).map_err(|e| t!("pas de serveur X ({})", e))?;
+    let ecran = c.setup().roots[n].clone();
+    let visuel = visuel_argb(&ecran).ok_or(t!("le serveur X n'a pas de visuel 32 bits (transparence impossible)"))?;
+    c.shape_query_version().map_err(|e| e.to_string())?.reply().map_err(|_| t!("le serveur X n'a pas l'extension SHAPE"))?;
+    let carte = c.generate_id().map_err(|e| e.to_string())?;
+    c.create_colormap(xproto::ColormapAlloc::NONE, carte, ecran.root, visuel).map_err(|e| e.to_string())?;
+
+    draw::set_theme(&cfg.maki.theme);
+    let espece = super::especes::Espece::parse(&cfg.maki.espece).unwrap_or_default();
+    draw::set_species(espece);
+    let s = (cfg.maki.taille * espece.pal().size).clamp(0.4, 3.5);
+    let (sw, sh) = ((470.0 * s) as u32, (560.0 * s) as u32);
+    let w = c.generate_id().map_err(|e| e.to_string())?;
+    let masque = xproto::EventMask::BUTTON_PRESS
+        | xproto::EventMask::BUTTON_RELEASE
+        | xproto::EventMask::POINTER_MOTION
+        | xproto::EventMask::ENTER_WINDOW
+        | xproto::EventMask::LEAVE_WINDOW
+        | xproto::EventMask::KEY_PRESS
+        | xproto::EventMask::FOCUS_CHANGE
+        | xproto::EventMask::EXPOSURE;
+    let attrs = xproto::CreateWindowAux::new().background_pixel(0).border_pixel(0).colormap(carte).override_redirect(1).event_mask(masque);
+    c.create_window(32, w, ecran.root, 0, 0, sw as u16, sh as u16, 0, xproto::WindowClass::INPUT_OUTPUT, visuel, &attrs).map_err(|e| e.to_string())?;
+    c.change_property8(xproto::PropMode::REPLACE, w, xproto::AtomEnum::WM_NAME, xproto::AtomEnum::STRING, b"L Katta").map_err(|e| e.to_string())?;
+    c.change_property8(xproto::PropMode::REPLACE, w, xproto::AtomEnum::WM_CLASS, xproto::AtomEnum::STRING, b"lkatta\0lkatta\0").map_err(|e| e.to_string())?;
+    let gc = c.generate_id().map_err(|e| e.to_string())?;
+    c.create_gc(gc, w, &xproto::CreateGCAux::new()).map_err(|e| e.to_string())?;
+    // Rien de cliquable tant que rien n'est dessiné.
+    c.shape_rectangles(shape::SO::SET, shape::SK::INPUT, xproto::ClipOrdering::UNSORTED, w, 0, 0, &[]).map_err(|e| e.to_string())?;
+    c.map_window(w).map_err(|e| e.to_string())?;
+    let setup = c.setup();
+    let (premier, dernier) = (setup.min_keycode, setup.max_keycode);
+    let touches = c
+        .get_keyboard_mapping(premier, dernier - premier + 1)
+        .map_err(|e| e.to_string())?
+        .reply()
+        .map(|r| (premier, r.keysyms_per_keycode, r.keysyms))
+        .unwrap_or((premier, 1, vec![]));
+    c.flush().map_err(|e| e.to_string())?;
+    let liste = ecrans(&c, ecran.root, ecran.width_in_pixels, ecran.height_in_pixels);
+    // Le descripteur de la connexion, pour réveiller la boucle quand X parle.
+    let fd = c.stream().as_fd().try_clone_to_owned().map_err(|e| e.to_string())?;
+    let aff = X11Aff { c, win: w, gc, taille: (sw, sh), pos: (0, 0), zones: vec![], a_placer: true, touches };
+
+    let mut boucle: EventLoop<'static, super::App> = EventLoop::try_new().map_err(|e| e.to_string())?;
+    let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(7);
+    let mut app = super::App::nouvelle(cfg, None, Some(aff), boucle.handle(), (sw, sh, s), espece, seed)?;
+    for (i, (nom, g)) in liste.into_iter().enumerate() {
+        app.screens.push(super::Screen { out: super::Sortie::X(i as u32), probe: None, area: Some((g.2, g.3)), geom: Some(g), nom });
+    }
+    app.current = app.screens.first().map(|s| s.out.clone());
+    app.area = app.screens.first().and_then(|s| s.area);
+    app.configured = true;
+    app.configured_once = false;
+
+    boucle
+        .handle()
+        .insert_source(rx, |ev, _, app: &mut super::App| {
+            if let calloop::channel::Event::Msg(m) = ev {
+                app.on_msg(m);
+            }
+        })
+        .map_err(|e| e.to_string())?;
+    boucle
+        .handle()
+        .insert_source(Timer::from_duration(Duration::from_millis(50)), |_, _, app: &mut super::App| TimeoutAction::ToDuration(app.tick()))
+        .map_err(|e| e.to_string())?;
+    boucle
+        .handle()
+        .insert_source(Generic::new(fd, Interest::READ, CMode::Level), |_, _, app: &mut super::App| {
+            evenements(app);
+            Ok(PostAction::Continue)
+        })
+        .map_err(|e| e.to_string())?;
+    while !app.exit {
+        boucle.dispatch(Duration::from_millis(500), &mut app).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Événements X11 → la même logique que sous Wayland (pointeur, clavier).
+fn evenements(app: &mut super::App) {
+    use smithay_client_toolkit::seat::pointer::{AxisScroll, PointerEventKind as K};
+    let mut lus = vec![];
+    if let Some(x) = app.x11.as_ref() {
+        while let Ok(Some(ev)) = x.c.poll_for_event() {
+            lus.push(ev);
+        }
+    }
+    let mut redessiner = false;
+    for ev in lus {
+        match ev {
+            Event::ButtonPress(e) | Event::ButtonRelease(e) => {
+                let appui = e.response_type & 0x7f == xproto::BUTTON_PRESS_EVENT;
+                let pos = (e.event_x as f32, e.event_y as f32);
+                let kind = match e.detail {
+                    4 | 5 if appui => {
+                        let d = if e.detail == 4 { -1 } else { 1 };
+                        let v = AxisScroll { absolute: d as f64 * 10.0, discrete: d, ..Default::default() };
+                        K::Axis { time: e.time, horizontal: AxisScroll::default(), vertical: v, source: None }
+                    }
+                    4 | 5 => continue,
+                    b => {
+                        let button = match b {
+                            1 => super::BTN_LEFT,
+                            2 => super::BTN_MIDDLE,
+                            3 => super::BTN_RIGHT,
+                            _ => continue,
+                        };
+                        if appui { K::Press { time: e.time, button, serial: 0 } } else { K::Release { time: e.time, button, serial: 0 } }
+                    }
+                };
+                redessiner |= app.pointeur(&kind, pos);
+            }
+            Event::MotionNotify(e) => redessiner |= app.pointeur(&K::Motion { time: e.time }, (e.event_x as f32, e.event_y as f32)),
+            Event::EnterNotify(e) => redessiner |= app.pointeur(&K::Enter { serial: 0 }, (e.event_x as f32, e.event_y as f32)),
+            Event::LeaveNotify(e) => redessiner |= app.pointeur(&K::Leave { serial: 0 }, (e.event_x as f32, e.event_y as f32)),
+            Event::KeyPress(e) => {
+                let etat = u16::from(e.state);
+                let maj = etat & (u16::from(xproto::KeyButMask::SHIFT) | u16::from(xproto::KeyButMask::LOCK)) != 0;
+                app.ctrl = etat & u16::from(xproto::KeyButMask::CONTROL) != 0;
+                app.shift = etat & u16::from(xproto::KeyButMask::SHIFT) != 0;
+                let sym = app.x11.as_ref().map(|x| x.symbole(e.detail, maj)).unwrap_or(0);
+                let keysym = smithay_client_toolkit::seat::keyboard::Keysym::from(sym);
+                let utf8 = keysym.key_char().filter(|c| !c.is_control() || *c == '\r').map(|c| c.to_string());
+                app.on_key(smithay_client_toolkit::seat::keyboard::KeyEvent { time: e.time, raw_code: e.detail as u32, keysym, utf8 });
+                redessiner = true;
+            }
+            Event::FocusIn(_) => app.kb_focus = true,
+            Event::FocusOut(_) => app.kb_focus = false,
+            Event::Expose(_) => redessiner = true,
+            _ => {}
+        }
+    }
+    if redessiner {
+        app.render();
+    }
 }
 
 #[cfg(test)]

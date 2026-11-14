@@ -110,6 +110,8 @@ fn make_main(shell: &LayerShell, comp: &CompositorState, qh: &QueueHandle<App>, 
 struct App {
     /// Tout ce qui est propre à Wayland (surfaces, tampons, sièges, protocoles).
     wl: Option<Wl>,
+    /// Affichage X11 (quand il n'y a pas de Wayland avec layer-shell).
+    x11: Option<x11::X11Aff>,
     screens: Vec<Screen>,
     current: Option<Sortie>,
     /// Bureau virtuel courant et place du maki sur chaque bureau (écran, x).
@@ -238,15 +240,29 @@ struct Wl {
 }
 
 pub fn run(cfg: Config, rx: Channel<Msg>) -> Result<(), String> {
-    let conn = Connection::connect_to_env().map_err(|e| format!("pas de session Wayland : {e}"))?;
+    // Affichage : Wayland avec layer-shell (KDE, Sway, Hyprland…), sinon X11 (XFCE, MATE,
+    // Cinnamon, i3…). LKATTA_AFFICHAGE=x11 force X11 (essais).
+    let x11_possible = std::env::var_os("DISPLAY").is_some();
+    if std::env::var("LKATTA_AFFICHAGE").is_ok_and(|v| v == "x11") || (std::env::var_os("WAYLAND_DISPLAY").is_none() && x11_possible) {
+        return x11::run(cfg, rx);
+    }
+    let conn = match Connection::connect_to_env() {
+        Ok(c) => c,
+        Err(_) if x11_possible => return x11::run(cfg, rx),
+        Err(e) => return Err(format!("pas de session Wayland : {e}")),
+    };
     let (globals, event_queue) = registry_queue_init::<App>(&conn).map_err(|e| e.to_string())?;
     let qh = event_queue.handle();
     let mut event_loop: EventLoop<'static, App> = EventLoop::try_new().map_err(|e| e.to_string())?;
     WaylandSource::new(conn.clone(), event_queue).insert(event_loop.handle()).map_err(|e| e.to_string())?;
 
     let compositor = CompositorState::bind(&globals, &qh).map_err(|_| "wl_compositor absent")?;
-    let layer_shell = LayerShell::bind(&globals, &qh)
-        .map_err(|_| "le compositeur ne gère pas wlr-layer-shell (KDE, Sway, Hyprland le gèrent ; GNOME non)")?;
+    let layer_shell = match LayerShell::bind(&globals, &qh) {
+        Ok(l) => l,
+        // GNOME (Wayland) : pas de layer-shell ; par Xwayland, le maki vit quand même.
+        Err(_) if x11_possible => return x11::run(cfg, rx),
+        Err(_) => return Err("le compositeur ne gère pas wlr-layer-shell (KDE, Sway, Hyprland le gèrent ; GNOME non)".into()),
+    };
     let shm = Shm::bind(&globals, &qh).map_err(|_| "wl_shm absent")?;
 
     draw::set_theme(&cfg.maki.theme);
@@ -260,106 +276,35 @@ pub fn run(cfg: Config, rx: Channel<Msg>) -> Result<(), String> {
     let pool = SlotPool::new((sw * sh * 4) as usize * 2, &shm).map_err(|e| e.to_string())?;
     let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(7);
 
-    let mut app = App {
-        wl: Some(Wl {
-            conn: conn.clone(),
-            registry_state: RegistryState::new(&globals),
-            seat_state: SeatState::new(&globals, &qh),
-            output_state: OutputState::new(&globals, &qh),
-            compositor,
-            shm,
-            pool,
-            tampons: Vec::new(),
-            layer,
-            layer_shell,
-            qh: qh.clone(),
-            pointer: None,
-            keyboard: None,
-            frame_pending: None,
-            idle_notifier: globals.bind::<ExtIdleNotifierV1, _, _>(&qh, 1..=1, ()).ok(),
-            dnd_manager: DataDeviceManagerState::bind(&globals, &qh).ok(),
-            dnd_device: None,
-            // KDE n'offre pas ce protocole (et a son script KWin) ; ailleurs, il remplace kdotool.
-            toplevel_mgr: if std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_uppercase().contains("KDE") {
-                None
-            } else {
-                globals.bind::<ZwlrForeignToplevelManagerV1, _, _>(&qh, 1..=3, ()).ok()
-            },
-            toplevels: Default::default(),
-            seat: None,
-            idle: None,
-        }),
-        screens: vec![],
-        current: None,
-        desktop: crate::kde::current().unwrap_or_default(),
-        desk_pos: Default::default(),
-        loop_handle: event_loop.handle(),
-        kb_focus: false,
-        ctrl: false,
-        shift: false,
-        interactivity: KeyboardInteractivity::None,
-        configured: false,
-        exit: false,
-        sw,
-        sh,
-        s,
-        origin: (0, 0),
-        area: None,
-        pixmap: Pixmap::new(sw, sh).ok_or("taille invalide")?,
-        sprite: Pixmap::new(sw, sh).ok_or("taille invalide")?,
-        bubble_pm: Pixmap::new(sw, sh).ok_or("taille invalide")?,
-        bubble_zone: None,
-        bubble_key: None,
-        bubble_lay: None,
-        redessin_attendu: false,
-        cout_image: 0.004,
-        configured_once: false,
-        text: draw::Text::load(),
-        maki: {
-            let mut m = Maki::new(400.0, s, seed);
-            m.sp = espece;
-            m
+    let wl = Wl {
+        conn: conn.clone(),
+        registry_state: RegistryState::new(&globals),
+        seat_state: SeatState::new(&globals, &qh),
+        output_state: OutputState::new(&globals, &qh),
+        compositor,
+        shm,
+        pool,
+        tampons: Vec::new(),
+        layer,
+        layer_shell,
+        qh: qh.clone(),
+        pointer: None,
+        keyboard: None,
+        frame_pending: None,
+        idle_notifier: globals.bind::<ExtIdleNotifierV1, _, _>(&qh, 1..=1, ()).ok(),
+        dnd_manager: DataDeviceManagerState::bind(&globals, &qh).ok(),
+        dnd_device: None,
+        // KDE n'offre pas ce protocole (et a son script KWin) ; ailleurs, il remplace kdotool.
+        toplevel_mgr: if std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_uppercase().contains("KDE") {
+            None
+        } else {
+            globals.bind::<ZwlrForeignToplevelManagerV1, _, _>(&qh, 1..=3, ()).ok()
         },
-        restart_at: None,
-        theme_check: Instant::now(),
-        dpr: 1,
-        resizing: false,
-        active_out: None,
-        pending_out: None,
-        drag_left: None,
-        perf: std::env::var("LKATTA_PERF").ok().map(|_| (0, 0.0)),
-        fenetre: None,
-        ne_pas_deranger: false,
-        micro: false,
-        absent: None,
-        en_attente: vec![],
-        etait_occupe: false,
-        occupe_depuis: None,
-        relance_differee: false,
-        accueil_a: (!cfg.accueil).then(|| Instant::now() + Duration::from_secs(4)),
-        dbg_taille: (0, 0),
-        depot_survol: false,
-        entered: false,
-        chat: Chat::new(cfg.clone()),
-        chat_layout: None,
-        bubble_layout: None,
-        bold: draw::load_bold(),
-        maki_rect: (0.0, 0.0, 0.0, 0.0),
-        cfg,
-        quiet: false,
-        hidden: false,
-        last_tick: Instant::now(),
-        last_spontaneous: None,
-        pointer_world: None,
-        hovered: false,
-        bulle_survolee: false,
-        capture: false,
-        cursor: CursorIcon::Default,
-        press: None,
-        dragging: false,
-        last_drag: Instant::now(),
-        derniere_touche: Instant::now(),
+        toplevels: Default::default(),
+        seat: None,
+        idle: None,
     };
+    let mut app = App::nouvelle(cfg, Some(wl), None, event_loop.handle(), (sw, sh, s), espece, seed)?;
     if app.text.is_none() {
         eprintln!("lkatta : aucune police trouvée, bulles muettes");
     }
@@ -383,6 +328,87 @@ pub fn run(cfg: Config, rx: Channel<Msg>) -> Result<(), String> {
         event_loop.dispatch(Duration::from_millis(500), &mut app).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+impl App {
+    /// Le maki et tout son état, quel que soit l'affichage (Wayland : `wl`, X11 : `x11`).
+    #[allow(clippy::too_many_arguments)]
+    fn nouvelle(cfg: Config, wl: Option<Wl>, x11: Option<x11::X11Aff>, loop_handle: LoopHandle<'static, App>, (sw, sh, s): (u32, u32, f32), espece: especes::Espece, seed: u64) -> Result<App, String> {
+        Ok(App {
+            wl,
+            x11,
+            screens: vec![],
+            current: None,
+            desktop: crate::kde::current().unwrap_or_default(),
+            desk_pos: Default::default(),
+            loop_handle,
+            kb_focus: false,
+            ctrl: false,
+            shift: false,
+            interactivity: KeyboardInteractivity::None,
+            configured: false,
+            exit: false,
+            sw,
+            sh,
+            s,
+            origin: (0, 0),
+            area: None,
+            pixmap: Pixmap::new(sw, sh).ok_or("taille invalide")?,
+            sprite: Pixmap::new(sw, sh).ok_or("taille invalide")?,
+            bubble_pm: Pixmap::new(sw, sh).ok_or("taille invalide")?,
+            bubble_zone: None,
+            bubble_key: None,
+            bubble_lay: None,
+            redessin_attendu: false,
+            cout_image: 0.004,
+            configured_once: false,
+            text: draw::Text::load(),
+            maki: {
+                let mut m = Maki::new(400.0, s, seed);
+                m.sp = espece;
+                m
+            },
+            restart_at: None,
+            theme_check: Instant::now(),
+            dpr: 1,
+            resizing: false,
+            active_out: None,
+            pending_out: None,
+            drag_left: None,
+            perf: std::env::var("LKATTA_PERF").ok().map(|_| (0, 0.0)),
+            fenetre: None,
+            ne_pas_deranger: false,
+            micro: false,
+            absent: None,
+            en_attente: vec![],
+            etait_occupe: false,
+            occupe_depuis: None,
+            relance_differee: false,
+            accueil_a: (!cfg.accueil).then(|| Instant::now() + Duration::from_secs(4)),
+            dbg_taille: (0, 0),
+            depot_survol: false,
+            entered: false,
+            chat: Chat::new(cfg.clone()),
+            chat_layout: None,
+            bubble_layout: None,
+            bold: draw::load_bold(),
+            maki_rect: (0.0, 0.0, 0.0, 0.0),
+            cfg,
+            quiet: false,
+            hidden: false,
+            last_tick: Instant::now(),
+            last_spontaneous: None,
+            pointer_world: None,
+            hovered: false,
+            bulle_survolee: false,
+            capture: false,
+            cursor: CursorIcon::Default,
+            press: None,
+            dragging: false,
+            last_drag: Instant::now(),
+            derniere_touche: Instant::now(),
+        })
+    }
 }
 
 impl App {
@@ -446,11 +472,16 @@ impl App {
             }
         }
         // Nouvelle surface : tampons neufs (l'ancienne surface rend les siens en disparaissant).
-        self.wl.as_mut().unwrap().tampons.clear();
+        if let Some(wl) = self.wl.as_mut() {
+            wl.tampons.clear();
+            wl.frame_pending = None;
+        }
         self.interactivity = k;
         self.configured = false;
         self.configured_once = false;
-        self.wl.as_mut().unwrap().frame_pending = None;
+        if let Some(x) = self.x11.as_mut() {
+            x.a_placer = true;
+        }
         self.origin = (0, 0);
         self.kb_focus = false;
         self.current = Some(o);
@@ -868,8 +899,12 @@ impl App {
     fn set_interactivity(&mut self, k: KeyboardInteractivity) {
         if self.interactivity != k {
             self.interactivity = k;
-            self.wl.as_mut().unwrap().layer.set_keyboard_interactivity(k);
-            self.wl.as_mut().unwrap().layer.commit();
+            if let Some(wl) = self.wl.as_mut() {
+                wl.layer.set_keyboard_interactivity(k);
+                wl.layer.commit();
+            } else if let Some(x) = self.x11.as_mut() {
+                x.clavier(k != KeyboardInteractivity::None);
+            }
         }
     }
 
@@ -1055,7 +1090,7 @@ impl App {
     fn render_inner(&mut self) {
         // L'image précédente n'est pas encore affichée : on ne l'enterre pas sous une autre
         // (sur une machine modeste, cela évite les à-coups). Garde-fou : 100 ms.
-        if self.wl.as_mut().unwrap().frame_pending.is_some_and(|t| t.elapsed() < Duration::from_millis(100)) {
+        if self.wl.as_ref().is_some_and(|wl| wl.frame_pending.is_some_and(|t| t.elapsed() < Duration::from_millis(100))) {
             // Redessinée dès que le compositeur aura affiché la précédente.
             self.redessin_attendu = true;
             return;
@@ -1129,9 +1164,18 @@ impl App {
         let grow_needed = nw > self.sw || nh > self.sh;
         let shrink_ok = self.sw > nw + 200 || self.sh > nh + 200;
         if grow_needed || shrink_ok {
-            self.wl.as_mut().unwrap().layer.set_size(nw, nh);
-            self.wl.as_mut().unwrap().layer.commit();
-            self.resizing = true;
+            if let Some(wl) = self.wl.as_mut() {
+                wl.layer.set_size(nw, nh);
+                wl.layer.commit();
+                self.resizing = true;
+            } else if let Some(x) = self.x11.as_mut() {
+                // X11 : la fenêtre change de taille tout de suite ; image suivante à la bonne taille.
+                x.redimensionner(nw, nh);
+                self.sw = nw;
+                self.sh = nh;
+                self.resize_pixmaps();
+                self.redessin_attendu = true;
+            }
             return;
         }
         // La surface ne bouge que si le contenu approche de son bord : KWin n'a pas à refaire
@@ -1162,16 +1206,25 @@ impl App {
                 self.current_name(), self.origin, lo.1, hi.1, self.maki.pos, self.maki.mode
             );
         }
-        if origin != self.origin {
+        if origin != self.origin || self.x11.as_ref().is_some_and(|x| x.a_placer) {
             self.origin = origin;
-            self.wl.as_mut().unwrap().layer.set_margin(origin.1, 0, 0, origin.0);
+            if let Some(wl) = self.wl.as_mut() {
+                wl.layer.set_margin(origin.1, 0, 0, origin.0);
+            } else {
+                // X11 : position absolue = coin de l'écran courant + origine dans l'écran.
+                let g = self.current.as_ref().and_then(|c| self.geom(c)).unwrap_or((0.0, 0.0, 0.0, 0.0));
+                if let Some(x) = self.x11.as_mut() {
+                    x.deplacer(g.0 as i32 + origin.0, g.1 as i32 + origin.1);
+                }
+            }
         }
         let to_local = |p: (f32, f32)| ((p.0 - sx) * k, (p.1 - sy) * k);
 
         self.pixmap.fill(tiny_skia::Color::TRANSPARENT);
         self.chat_layout = None;
         self.bubble_layout = None;
-        let region = Region::new(&self.wl.as_mut().unwrap().compositor).ok();
+        // Zones qui reçoivent la souris (px logiques de la surface) ; le reste la laisse passer.
+        let mut zones: Vec<(i32, i32, i32, i32)> = vec![];
 
         if !cache && !self.capture {
             if let Some(t) = &self.maki.tree {
@@ -1252,24 +1305,31 @@ impl App {
                 _ => (mx - 45.0 * s, my - 105.0 * s, 95.0 * s, 108.0 * s),
             };
             self.maki_rect = tight;
-            if let Some(r) = &region {
-                // La région d'entrée est en px logiques de la surface.
-                if self.maki.visible() {
-                    r.add((tight.0 - sx) as i32, (tight.1 - sy) as i32, tight.2 as i32, tight.3 as i32);
-                }
-                for b in [self.chat_layout.as_ref().map(|l| l.rect), self.bubble_layout.as_ref().map(|l| l.rect)].into_iter().flatten() {
-                    r.add((b.0 / k) as i32, (b.1 / k) as i32, (b.2 / k) as i32 + 2, (b.3 / k) as i32 + 2);
-                }
+            if self.maki.visible() {
+                zones.push(((tight.0 - sx) as i32, (tight.1 - sy) as i32, tight.2 as i32, tight.3 as i32));
             }
-        }
-        let surface = self.wl.as_mut().unwrap().layer.wl_surface().clone();
-        if let Some(r) = &region {
-            surface.set_input_region(Some(r.wl_region()));
+            for b in [self.chat_layout.as_ref().map(|l| l.rect), self.bubble_layout.as_ref().map(|l| l.rect)].into_iter().flatten() {
+                zones.push(((b.0 / k) as i32, (b.1 / k) as i32, (b.2 / k) as i32 + 2, (b.3 / k) as i32 + 2));
+            }
         }
         let (bw, bh) = ((self.sw * self.dpr) as i32, (self.sh * self.dpr) as i32);
         if self.pixmap.width() as i32 != bw || self.pixmap.height() as i32 != bh {
             self.resize_pixmaps();
             return;
+        }
+        // X11 : zones cliquables (SHAPE) et image envoyée telle quelle.
+        if let Some(x) = self.x11.as_mut() {
+            x.zones(&zones);
+            x.presenter(&self.pixmap);
+            return;
+        }
+        let Some(wl) = self.wl.as_ref() else { return };
+        let surface = wl.layer.wl_surface().clone();
+        if let Ok(r) = Region::new(&wl.compositor) {
+            for z in &zones {
+                r.add(z.0, z.1, z.2, z.3);
+            }
+            surface.set_input_region(Some(r.wl_region()));
         }
         let Some(i) = self.tampon_libre(bw, bh) else {
             // Les deux tampons sont encore à l'écran : on redessinera quand l'un revient.

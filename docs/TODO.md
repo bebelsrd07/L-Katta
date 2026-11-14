@@ -166,16 +166,17 @@ Une application généraliste qui s'adapte à chaque utilisateur. Ordre recomman
      dans un KWin virtuel avec Xwayland (fenêtre visible, transparente, zone cliquable posée).
      Reste à vérifier sur un vrai bureau X11 : réception des clics (Xwayland refuse les clics
      simulés sans portail) ;
-   - b. (en cours ; ✔ plomberie Wayland rangée dans `App.wl`, devenue facultative ; ✔ écrans
-     décrits par `Sortie` (Wayland ou X11) avec nom et géométrie ; vérifié sous KDE à chaque
-     étape. Suite : brancher l'affichage X11 aux ~20 endroits restants (envoi de l'image,
-     taille, position, zone cliquable, clavier, curseur), puis boucle X11 qui appelle la même
-     logique) séparer `mascot/mod.rs` en une **scène** commune (tick, rendu dans un Pixmap, clics et
-     touches abstraits, bulles, discussion) et un **affichage** (Wayland layer-shell / X11) ;
-   - c. affichage X11 complet : écrans (RandR), clavier pour la bulle (fenêtre qui prend le
-     focus seulement quand on clique dedans), fenêtre active (_NET_ACTIVE_WINDOW), plein écran,
-     glisser-déposer (XDND) ;
-   - d. choix automatique : Wayland avec layer-shell, sinon X11 (`DISPLAY`), sinon message clair.
+   - b. ✔ scène commune : plomberie Wayland facultative (`App.wl`), écrans décrits par
+     `Sortie`, pointeur séparé (`App::pointeur`), constructeur commun (`App::nouvelle`) ;
+     vérifié sous KDE à chaque étape ;
+   - c. ✔ affichage X11 du vrai maki (src/mascot/x11.rs) : fenêtre ARGB au-dessus de tout,
+     zones cliquables (SHAPE), écrans (RandR), souris et clavier traduits vers la même logique,
+     bulle qui prend le clavier ; vérifié dans un KWin virtuel avec Xwayland (maki, accueil et
+     bulles dessinés). Reste : essai sur un vrai bureau X11 (clics et frappe : Xwayland refuse
+     les événements simulés), touches mortes et composition (accents tapés), fenêtre active
+     (_NET_ACTIVE_WINDOW), zone utile (_NET_WORKAREA), glisser-déposer (XDND) ;
+   - d. ✔ choix automatique : Wayland avec layer-shell, sinon X11 (`DISPLAY`) — GNOME compris,
+     par Xwayland ; `LKATTA_AFFICHAGE=x11` force X11 pour les essais.
 4. **GNOME (Wayland)** : extension GNOME Shell qui accueille le maki (GNOME refuse layer-shell).
 5. **Distribution** : AUR, Flatpak.
 

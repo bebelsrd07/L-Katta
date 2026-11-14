@@ -56,3 +56,7 @@
 - X11 (en cours, docs/TODO.md §3) : src/mascot/x11.rs. Essai : un script qui lance
   `lkatta x11-essai --capture x.png --duree 4`, passé SEUL à `kwin_wayland --virtual --xwayland`
   (kwin lance chaque argument après les options comme un programme séparé).
+- Affichage : mascot/mod.rs = logique commune + Wayland (`App.wl`, facultatif) ; mascot/x11.rs =
+  affichage X11 (`App.x11`). Essai X11 du vrai maki : script passé à `kwin_wayland --virtual
+  --xwayland` qui lance lkatta avec LKATTA_AFFICHAGE=x11, XDG_* de test et
+  LKATTA_X11_CAPTURE=image.png (dernière image envoyée).
