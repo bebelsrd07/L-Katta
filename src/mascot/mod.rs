@@ -9,6 +9,7 @@ pub mod behavior;
 pub mod draw;
 pub mod dessin;
 pub mod especes;
+pub mod x11;
 
 use std::time::{Duration, Instant};
 

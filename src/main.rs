@@ -281,6 +281,11 @@ fn main() {
         }
         "verifier-signature" => maj::verifier_fichiers(args.get(1).map(String::as_str).unwrap_or("SHA256SUMS"), args.get(2).map(String::as_str).unwrap_or("SHA256SUMS.sig")).map(|_| println!("signature valide")),
         "lire-fenetre" | "read-window" => crate::atspi::fenetre_active(None).map(|l| println!("[{} — {}]\n{}", l.application, l.titre, l.texte)),
+        "x11-essai" => {
+            let capture = args.iter().position(|a| a == "--capture").and_then(|i| args.get(i + 1)).map(String::as_str);
+            let duree = args.iter().position(|a| a == "--duree").and_then(|i| args.get(i + 1)).and_then(|d| d.parse().ok()).unwrap_or(8.0);
+            mascot::x11::essai(capture, duree)
+        }
         "apercu-film" => film::rendre(args.get(1).map(String::as_str).unwrap_or("lkatta.mp4"), args.get(2).and_then(|x| x.parse().ok())),
         "apercu-fils" => install::preview_fils(args.get(1).map(String::as_str).unwrap_or("lkatta-fils.png")),
         "apercu-discussion" => install::preview_chat(args.get(1).map(String::as_str).unwrap_or("lkatta-discussion.png")),

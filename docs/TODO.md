@@ -159,7 +159,17 @@ Une application généraliste qui s'adapte à chaque utilisateur. Ordre recomman
    et liste des fenêtres (`hyprctl`, `swaymsg`, sinon protocole Wayland standard), bureaux
    virtuels.
 3. **Affichage X11** (XFCE, Cinnamon, MATE, i3, KDE en X11) : fenêtre transparente au-dessus
-   de tout, zones cliquables découpées ; même maki, mêmes bulles.
+   de tout, zones cliquables découpées ; même maki, mêmes bulles. Architecture retenue :
+   - `behavior.rs` (comportement) et `draw.rs` (dessin tiny-skia) servent tels quels ;
+   - a. ✔ prototype `src/mascot/x11.rs` (x11rb) : fenêtre ARGB override-redirect au-dessus de
+     tout, entrée limitée au maki (extension SHAPE), maki animé, clic ; essai `lkatta x11-essai`
+     dans un KWin virtuel avec Xwayland (0.2.7) ;
+   - b. séparer `mascot/mod.rs` en une **scène** commune (tick, rendu dans un Pixmap, clics et
+     touches abstraits, bulles, discussion) et un **affichage** (Wayland layer-shell / X11) ;
+   - c. affichage X11 complet : écrans (RandR), clavier pour la bulle (fenêtre qui prend le
+     focus seulement quand on clique dedans), fenêtre active (_NET_ACTIVE_WINDOW), plein écran,
+     glisser-déposer (XDND) ;
+   - d. choix automatique : Wayland avec layer-shell, sinon X11 (`DISPLAY`), sinon message clair.
 4. **GNOME (Wayland)** : extension GNOME Shell qui accueille le maki (GNOME refuse layer-shell).
 5. **Distribution** : AUR, Flatpak.
 

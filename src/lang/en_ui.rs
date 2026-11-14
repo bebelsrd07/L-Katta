@@ -469,4 +469,7 @@ pub const T: &[(&str, &str)] = &[
     ("Musique", "Music"),
     ("Je regarde ton bureau et tes applications…", "Looking at your desktop and apps…"),
     ("changer une fenêtre de bureau n'est pas possible sur ce bureau", "moving a window to another desktop isn't possible on this desktop"),
+    ("pas de serveur X ({})", "no X server ({})"),
+    ("le serveur X n'a pas de visuel 32 bits (transparence impossible)", "the X server has no 32-bit visual (no transparency)"),
+    ("le serveur X n'a pas l'extension SHAPE", "the X server lacks the SHAPE extension"),
 ];
