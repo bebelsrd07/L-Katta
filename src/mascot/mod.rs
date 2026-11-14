@@ -1729,121 +1729,10 @@ impl PointerHandler for App {
     fn pointer_frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_pointer::WlPointer, events: &[PointerEvent]) {
         let mut redessiner = false;
         for ev in events {
-            if &ev.surface != self.wl.as_mut().unwrap().layer.wl_surface() {
+            if self.wl.as_ref().is_none_or(|wl| &ev.surface != wl.layer.wl_surface()) {
                 continue;
             }
-            let local = (ev.position.0 as f32, ev.position.1 as f32);
-            // Les zones des bulles sont en px de l'image (densité de l'écran).
-            let dl = (local.0 * self.dpr as f32, local.1 * self.dpr as f32);
-            let world = (local.0 + self.origin.0 as f32, local.1 + self.origin.1 as f32);
-            let on_maki = hit(self.maki_rect, world);
-            match ev.kind {
-                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                    // Petite bulle survolée puis quittée : lue, elle se ferme.
-                    let sur_bulle = self.maki.bubble.is_some() && self.bubble_layout.as_ref().is_some_and(|l| hit(l.rect, dl));
-                    if sur_bulle {
-                        self.bulle_survolee = true;
-                    } else if self.bulle_survolee && !on_maki {
-                        self.bulle_survolee = false;
-                        self.fermer_bulle_auto();
-                    }
-                    self.drag_left = None;
-                    self.pointer_world = Some(world);
-                    self.hovered = on_maki && !self.dragging;
-                    if let Some(p) = &self.press {
-                        if p.button == BTN_LEFT && p.on_maki {
-                            let moved = ((world.0 - p.at.0).powi(2) + (world.1 - p.at.1).powi(2)).sqrt();
-                            if !self.dragging && moved > 6.0 {
-                                self.dragging = true;
-                                self.maki.bubble = None;
-                                self.maki.grab(world);
-                                self.last_drag = Instant::now();
-                            } else if self.dragging {
-                                let dt = self.last_drag.elapsed().as_secs_f32();
-                                self.last_drag = Instant::now();
-                                self.maki.drag_to(world, dt);
-                            }
-                        }
-                    }
-                    let c = if self.dragging {
-                        CursorIcon::Grabbing
-                    } else if on_maki {
-                        CursorIcon::Grab
-                    } else if self.chat_layout.as_ref().is_some_and(|l| l.links.iter().any(|(r, _)| hit(*r, dl))) {
-                        CursorIcon::Pointer
-                    } else if self.chat_layout.as_ref().is_some_and(|l| hit(l.input, dl)) {
-                        CursorIcon::Text
-                    } else {
-                        CursorIcon::Default
-                    };
-                    self.set_cursor(c);
-                }
-                PointerEventKind::Leave { .. } => {
-                    self.hovered = false;
-                    if self.bulle_survolee {
-                        self.bulle_survolee = false;
-                        self.fermer_bulle_auto();
-                    }
-                    if self.dragging {
-                        self.drag_left = Some(Instant::now());
-                    }
-                    self.cursor = CursorIcon::Default;
-                    if !self.dragging {
-                        self.press = None;
-                        self.pointer_world = None;
-                    }
-                }
-                PointerEventKind::Press { button, .. } => {
-                    self.press = Some(Press { button, at: world, on_maki });
-                }
-                PointerEventKind::Release { button, .. } => {
-                    let press = self.press.take();
-                    if self.dragging {
-                        self.dragging = false;
-                        let ctx = self.ctx();
-                        self.maki.release(&ctx);
-                        continue;
-                    }
-                    if let Some(p) = press.filter(|p| p.button == button) {
-                        self.on_click(button, dl, p.on_maki);
-                        // Le résultat du clic se voit tout de suite (pas au prochain tour).
-                        redessiner = true;
-                    }
-                }
-                PointerEventKind::Axis { vertical, .. } => {
-                    let in_picker = self.chat_layout.as_ref().and_then(|l| l.picker).is_some_and(|r| hit(r, dl));
-                    if in_picker {
-                        let d = if vertical.discrete != 0 { vertical.discrete as f64 } else { vertical.absolute / 10.0 };
-                        if let Some(p) = &mut self.chat.picker {
-                            if d > 0.0 {
-                                p.scroll += 2;
-                            } else if d < 0.0 {
-                                p.scroll = p.scroll.saturating_sub(2);
-                            }
-                        }
-                        if let Some(h) = &mut self.chat.histo {
-                            if d > 0.0 {
-                                h.scroll = (h.scroll + 2).min(500);
-                            } else if d < 0.0 {
-                                h.scroll = h.scroll.saturating_sub(2);
-                            }
-                        }
-                        let (content, view) = self.chat_layout.as_ref().map(|l| (l.panel_content, l.panel_view)).unwrap_or((0.0, 0.0));
-                        if let Some(p) = &mut self.chat.panneau {
-                            let max = (content - view).max(0.0);
-                            p.scroll = (p.scroll + if d > 0.0 { 40.0 } else if d < 0.0 { -40.0 } else { 0.0 }).clamp(0.0, max);
-                        }
-                    } else if self.chat_layout.as_ref().is_some_and(|l| hit(l.rect, dl)) {
-                        let d = if vertical.discrete != 0 { vertical.discrete as f64 } else { vertical.absolute / 10.0 };
-                        if d < 0.0 {
-                            self.chat.scroll += 2;
-                        } else if d > 0.0 {
-                            self.chat.scroll = self.chat.scroll.saturating_sub(2);
-                        }
-                    }
-                    redessiner = true;
-                }
-            }
+            redessiner |= self.pointeur(&ev.kind, (ev.position.0 as f32, ev.position.1 as f32));
         }
         if redessiner {
             self.render();
@@ -2089,5 +1978,125 @@ impl App {
                 Action::Fermer => h.close(),
             }
         }
+    }
+}
+
+impl App {
+    /// Un événement du pointeur sur la surface du maki (position locale, en px logiques), quel
+    /// que soit l'affichage (Wayland ou X11). Renvoie vrai s'il faut redessiner.
+    fn pointeur(&mut self, kind: &PointerEventKind, local: (f32, f32)) -> bool {
+        let mut redessiner = false;
+        // Les zones des bulles sont en px de l'image (densité de l'écran).
+        let dl = (local.0 * self.dpr as f32, local.1 * self.dpr as f32);
+        let world = (local.0 + self.origin.0 as f32, local.1 + self.origin.1 as f32);
+        let on_maki = hit(self.maki_rect, world);
+        match *kind {
+            PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                // Petite bulle survolée puis quittée : lue, elle se ferme.
+                let sur_bulle = self.maki.bubble.is_some() && self.bubble_layout.as_ref().is_some_and(|l| hit(l.rect, dl));
+                if sur_bulle {
+                    self.bulle_survolee = true;
+                } else if self.bulle_survolee && !on_maki {
+                    self.bulle_survolee = false;
+                    self.fermer_bulle_auto();
+                }
+                self.drag_left = None;
+                self.pointer_world = Some(world);
+                self.hovered = on_maki && !self.dragging;
+                if let Some(p) = &self.press {
+                    if p.button == BTN_LEFT && p.on_maki {
+                        let moved = ((world.0 - p.at.0).powi(2) + (world.1 - p.at.1).powi(2)).sqrt();
+                        if !self.dragging && moved > 6.0 {
+                            self.dragging = true;
+                            self.maki.bubble = None;
+                            self.maki.grab(world);
+                            self.last_drag = Instant::now();
+                        } else if self.dragging {
+                            let dt = self.last_drag.elapsed().as_secs_f32();
+                            self.last_drag = Instant::now();
+                            self.maki.drag_to(world, dt);
+                        }
+                    }
+                }
+                let c = if self.dragging {
+                    CursorIcon::Grabbing
+                } else if on_maki {
+                    CursorIcon::Grab
+                } else if self.chat_layout.as_ref().is_some_and(|l| l.links.iter().any(|(r, _)| hit(*r, dl))) {
+                    CursorIcon::Pointer
+                } else if self.chat_layout.as_ref().is_some_and(|l| hit(l.input, dl)) {
+                    CursorIcon::Text
+                } else {
+                    CursorIcon::Default
+                };
+                self.set_cursor(c);
+            }
+            PointerEventKind::Leave { .. } => {
+                self.hovered = false;
+                if self.bulle_survolee {
+                    self.bulle_survolee = false;
+                    self.fermer_bulle_auto();
+                }
+                if self.dragging {
+                    self.drag_left = Some(Instant::now());
+                }
+                self.cursor = CursorIcon::Default;
+                if !self.dragging {
+                    self.press = None;
+                    self.pointer_world = None;
+                }
+            }
+            PointerEventKind::Press { button, .. } => {
+                self.press = Some(Press { button, at: world, on_maki });
+            }
+            PointerEventKind::Release { button, .. } => {
+                let press = self.press.take();
+                if self.dragging {
+                    self.dragging = false;
+                    let ctx = self.ctx();
+                    self.maki.release(&ctx);
+                    return redessiner;
+                }
+                if let Some(p) = press.filter(|p| p.button == button) {
+                    self.on_click(button, dl, p.on_maki);
+                    // Le résultat du clic se voit tout de suite (pas au prochain tour).
+                    redessiner = true;
+                }
+            }
+            PointerEventKind::Axis { vertical, .. } => {
+                let in_picker = self.chat_layout.as_ref().and_then(|l| l.picker).is_some_and(|r| hit(r, dl));
+                if in_picker {
+                    let d = if vertical.discrete != 0 { vertical.discrete as f64 } else { vertical.absolute / 10.0 };
+                    if let Some(p) = &mut self.chat.picker {
+                        if d > 0.0 {
+                            p.scroll += 2;
+                        } else if d < 0.0 {
+                            p.scroll = p.scroll.saturating_sub(2);
+                        }
+                    }
+                    if let Some(h) = &mut self.chat.histo {
+                        if d > 0.0 {
+                            h.scroll = (h.scroll + 2).min(500);
+                        } else if d < 0.0 {
+                            h.scroll = h.scroll.saturating_sub(2);
+                        }
+                    }
+                    let (content, view) = self.chat_layout.as_ref().map(|l| (l.panel_content, l.panel_view)).unwrap_or((0.0, 0.0));
+                    if let Some(p) = &mut self.chat.panneau {
+                        let max = (content - view).max(0.0);
+                        p.scroll = (p.scroll + if d > 0.0 { 40.0 } else if d < 0.0 { -40.0 } else { 0.0 }).clamp(0.0, max);
+                    }
+                } else if self.chat_layout.as_ref().is_some_and(|l| hit(l.rect, dl)) {
+                    let d = if vertical.discrete != 0 { vertical.discrete as f64 } else { vertical.absolute / 10.0 };
+                    if d < 0.0 {
+                        self.chat.scroll += 2;
+                    } else if d > 0.0 {
+                        self.chat.scroll = self.chat.scroll.saturating_sub(2);
+                    }
+                }
+                redessiner = true;
+            }
+        }
+        redessiner
     }
 }
