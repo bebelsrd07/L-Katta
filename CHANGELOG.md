@@ -4,6 +4,12 @@ Règle : chaque chiffre va de 0 à 9 (0.0.9 → 0.1.0, 0.9.9 → 1.0.0).
 
 ## À venir
 
+- **Maki plus mignon et plus vivant**, pour les six espèces : vraies petites mains aux doigts
+  écartés au bout de bras pliés (au lieu d'une tige terminée par une boule), yeux plus grands
+  avec deux reflets, tête un peu plus grosse, truffe arrondie, bouche en ω, joues roses, duvet
+  de joue, collerettes duveteuses, contours de la couleur du pelage, volume par ombre et reflet.
+  Queue dessinée en ruban (quelques remplissages au lieu de 57 traits) : le dessin ne coûte que
+  6 % de plus qu'avant (1,80 ms contre 1,69 ms par image dans `cout_dessin`).
 - **Dépôt Flatpak** : `flatpak remote-add --user lkatta https://raantss18.github.io/L-Katta/flatpak/lkatta.flatpakrepo`
   puis `flatpak install --user lkatta io.github.raantss18.LKatta` ; les versions suivantes arrivent
   avec `flatpak update`. Le dépôt est signé (clé GPG du dépôt) et servi par le site.

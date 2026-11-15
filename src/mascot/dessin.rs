@@ -13,33 +13,84 @@ pub use super::behavior::Attitude;
 use super::behavior::{Expr, Pose, PoseKind};
 use super::especes::{Oreilles, Pal, Queue};
 
-/// Encre du contour.
-const INK: (u8, u8, u8) = (44, 36, 40);
+/// Encre des traits fins (sourcils, bouche, doigt de l'aye-aye).
+const INK: (u8, u8, u8) = (52, 40, 46);
 /// Demi-épaisseur du contour (unités du personnage).
-const OW: f32 = 1.7;
+const OW: f32 = 1.3;
 
 type C = (u8, u8, u8);
 
+fn mix(a: C, b: C, k: f32) -> C {
+    let f = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * k).round().clamp(0.0, 255.0) as u8;
+    (f(a.0, b.0), f(a.1, b.1), f(a.2, b.2))
+}
+
+/// Plus sombre (vers l'encre).
+fn ombre(c: C, k: f32) -> C {
+    mix(c, (24, 16, 22), k)
+}
+
+/// Plus clair (vers un blanc chaud).
+fn lumiere(c: C, k: f32) -> C {
+    mix(c, (255, 250, 244), k)
+}
+
+/// Contour d'une partie : une teinte sombre de sa propre couleur, plus doux qu'un trait noir.
+fn bord(c: C) -> C {
+    ombre(c, 0.62)
+}
+
 fn paint(c: C) -> Paint<'static> {
+    paint_a(c, 1.0)
+}
+
+fn paint_a(c: C, a: f32) -> Paint<'static> {
     let mut p = Paint::default();
-    p.set_color_rgba8(c.0, c.1, c.2, 255);
+    p.set_color_rgba8(c.0, c.1, c.2, (a.clamp(0.0, 1.0) * 255.0) as u8);
     p.anti_alias = true;
     p
 }
 
+fn ovale(cx: f32, cy: f32, rx: f32, ry: f32) -> Option<tiny_skia::Path> {
+    Rect::from_xywh(cx - rx, cy - ry, rx * 2.0, ry * 2.0).and_then(PathBuilder::from_oval)
+}
+
 fn fill_oval(pm: &mut Pixmap, t: Transform, cx: f32, cy: f32, rx: f32, ry: f32, c: C) {
-    if let Some(path) = Rect::from_xywh(cx - rx, cy - ry, rx * 2.0, ry * 2.0).and_then(PathBuilder::from_oval) {
-        pm.fill_path(&path, &paint(c), FillRule::Winding, t, None);
+    fill_oval_a(pm, t, cx, cy, rx, ry, c, 1.0);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fill_oval_a(pm: &mut Pixmap, t: Transform, cx: f32, cy: f32, rx: f32, ry: f32, c: C, a: f32) {
+    if let Some(path) = ovale(cx, cy, rx, ry) {
+        pm.fill_path(&path, &paint_a(c, a), FillRule::Winding, t, None);
     }
 }
 
-/// Ovale cerné d'encre.
-fn ov(pm: &mut Pixmap, t: Transform, cx: f32, cy: f32, rx: f32, ry: f32, c: C) {
-    fill_oval(pm, t, cx, cy, rx + OW, ry + OW, INK);
-    fill_oval(pm, t, cx, cy, rx, ry, c);
+/// Ovale en volume, sans dégradé (les dégradés coûtent cher à dessiner) : ombre en bas à
+/// droite, couleur, puis un reflet clair et transparent vers la lumière (en haut à gauche).
+#[allow(clippy::too_many_arguments)]
+fn volume(pm: &mut Pixmap, t: Transform, cx: f32, cy: f32, rx: f32, ry: f32, c: C, fort: f32) {
+    fill_oval(pm, t, cx, cy, rx, ry, ombre(c, 0.16 * fort));
+    fill_oval(pm, t, cx - rx * 0.06, cy - ry * 0.08, rx * 0.93, ry * 0.91, c);
+    fill_oval_a(pm, t, cx - rx * 0.22, cy - ry * 0.28, rx * 0.6, ry * 0.55, lumiere(c, 0.5), 0.2 * fort);
 }
 
-fn stroke(pm: &mut Pixmap, t: Transform, pts: &[(f32, f32)], w: f32, c: C, cap: LineCap) {
+/// Ovale en volume, sans contour (ventre, masque, calotte).
+fn douce(pm: &mut Pixmap, t: Transform, cx: f32, cy: f32, rx: f32, ry: f32, c: C) {
+    volume(pm, t, cx, cy, rx, ry, c, 0.7);
+}
+
+/// Ovale cerné de sa propre teinte sombre, en volume (les petits restent unis : moins de calcul).
+fn ov(pm: &mut Pixmap, t: Transform, cx: f32, cy: f32, rx: f32, ry: f32, c: C) {
+    fill_oval(pm, t, cx, cy, rx + OW, ry + OW, bord(c));
+    if rx.min(ry) < 5.0 {
+        fill_oval(pm, t, cx, cy, rx, ry, c);
+    } else {
+        volume(pm, t, cx, cy, rx, ry, c, 1.0);
+    }
+}
+
+fn chemin(pts: &[(f32, f32)]) -> Option<tiny_skia::Path> {
     let mut pb = PathBuilder::new();
     pb.move_to(pts[0].0, pts[0].1);
     match pts.len() {
@@ -47,15 +98,26 @@ fn stroke(pm: &mut Pixmap, t: Transform, pts: &[(f32, f32)], w: f32, c: C, cap: 
         3 => pb.quad_to(pts[1].0, pts[1].1, pts[2].0, pts[2].1),
         _ => pb.cubic_to(pts[1].0, pts[1].1, pts[2].0, pts[2].1, pts[3].0, pts[3].1),
     }
-    if let Some(path) = pb.finish() {
-        pm.stroke_path(&path, &paint(c), &Stroke { width: w, line_cap: cap, ..Default::default() }, t, None);
+    pb.finish()
+}
+
+fn stroke(pm: &mut Pixmap, t: Transform, pts: &[(f32, f32)], w: f32, c: C, cap: LineCap) {
+    stroke_a(pm, t, pts, w, c, cap, 1.0);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn stroke_a(pm: &mut Pixmap, t: Transform, pts: &[(f32, f32)], w: f32, c: C, cap: LineCap, a: f32) {
+    if let Some(path) = chemin(pts) {
+        pm.stroke_path(&path, &paint_a(c, a), &Stroke { width: w, line_cap: cap, ..Default::default() }, t, None);
     }
 }
 
-/// Membre (ou trait épais) cerné : segment, courbe quadratique ou cubique.
+/// Membre cerné de sa teinte sombre : segment, courbe quadratique ou cubique.
 fn lim(pm: &mut Pixmap, t: Transform, pts: &[(f32, f32)], w: f32, c: C) {
-    stroke(pm, t, pts, w + 2.0 * OW, INK, LineCap::Round);
-    stroke(pm, t, pts, w, c, LineCap::Round);
+    let Some(path) = chemin(pts) else { return };
+    let trait_ = |w: f32| Stroke { width: w, line_cap: LineCap::Round, line_join: tiny_skia::LineJoin::Round, ..Default::default() };
+    pm.stroke_path(&path, &paint(bord(c)), &trait_(w + 2.0 * OW), t, None);
+    pm.stroke_path(&path, &paint(c), &trait_(w), t, None);
 }
 
 /// Trait fin d'encre (sourcils, bouche, doigts).
@@ -72,17 +134,66 @@ fn poly(pm: &mut Pixmap, t: Transform, pts: &[(f32, f32)], c: C, cerne: bool) {
     pb.close();
     if let Some(path) = pb.finish() {
         if cerne {
-            pm.stroke_path(&path, &paint(INK), &Stroke { width: 2.0 * OW, line_join: tiny_skia::LineJoin::Round, ..Default::default() }, t, None);
+            pm.stroke_path(&path, &paint(bord(c)), &Stroke { width: 2.0 * OW, line_join: tiny_skia::LineJoin::Round, ..Default::default() }, t, None);
         }
         pm.fill_path(&path, &paint(c), FillRule::Winding, t, None);
     }
 }
 
-/// Patte (main ou pied) : petit ovale cerné et deux doigts.
+/// Duvet : petits ronds cernés qui se chevauchent (joues, collerette), sans dégradé.
+fn duvet(pm: &mut Pixmap, t: Transform, ronds: &[(f32, f32, f32)], c: C) {
+    for &(x, y, r) in ronds {
+        fill_oval(pm, t, x, y, r + OW, r + OW, bord(c));
+    }
+    for &(x, y, r) in ronds {
+        fill_oval(pm, t, x, y, r, r, c);
+    }
+}
+
+/// Patte (main ou pied) : petit ovale cerné, deux doigts esquissés et un coussinet.
 fn patte(pm: &mut Pixmap, t: Transform, x: f32, y: f32, rx: f32, ry: f32, c: C) {
     ov(pm, t, x, y, rx, ry, c);
-    ink(pm, t, &[(x + rx * 0.15, y + ry * 0.2), (x + rx * 0.15, y + ry * 0.95)], 0.9);
-    ink(pm, t, &[(x + rx * 0.6, y + ry * 0.1), (x + rx * 0.62, y + ry * 0.8)], 0.9);
+    let d = ombre(c, 0.45);
+    stroke(pm, t, &[(x + rx * 0.05, y + ry * 0.35), (x + rx * 0.08, y + ry * 0.95)], 0.7, d, LineCap::Round);
+    stroke(pm, t, &[(x + rx * 0.5, y + ry * 0.25), (x + rx * 0.55, y + ry * 0.85)], 0.7, d, LineCap::Round);
+    fill_oval_a(pm, t, x - rx * 0.35, y - ry * 0.3, rx * 0.35, ry * 0.3, lumiere(c, 0.5), 0.45);
+}
+
+/// Main de lémurien au bout d'un bras : paume et quatre longs doigts écartés en éventail,
+/// orientés dans l'axe `dir` (radians). Un seul contour pour toute la main.
+fn main(pm: &mut Pixmap, t: Transform, x: f32, y: f32, dir: f32, taille: f32, c: C) {
+    let ht = t.pre_concat(Transform::from_rotate_at(dir.to_degrees(), x, y));
+    let k = taille;
+    // Paume (un peu en avant du poignet), puis doigts : pouce écarté, trois doigts serrés.
+    let paume = (x + k * 0.45, y, k * 0.85, k * 0.72);
+    let doigts = [(-62.0f32, 0.8f32), (-20.0, 1.0), (8.0, 1.05), (34.0, 0.95)];
+    let doigt = |a: f32, l: f32| {
+        let r = a.to_radians();
+        (paume.0 + r.cos() * k * 0.95 * l, paume.1 + r.sin() * k * 0.8, k * 0.48 * l, k * 0.27, a)
+    };
+    let tous: Vec<(f32, f32, f32, f32, f32)> = doigts.iter().map(|&(a, l)| doigt(a, l)).collect();
+    let rond = |pm: &mut Pixmap, (cx, cy, rx, ry, a): (f32, f32, f32, f32, f32), plus: f32, col: C| {
+        fill_oval(pm, ht.pre_concat(Transform::from_rotate_at(a, cx, cy)), cx, cy, rx + plus, ry + plus, col);
+    };
+    let contour = bord(c);
+    fill_oval(pm, ht, paume.0, paume.1, paume.2 + OW, paume.3 + OW, contour);
+    for d in &tous {
+        rond(pm, *d, OW, contour);
+    }
+    for d in &tous {
+        rond(pm, *d, 0.0, c);
+    }
+    fill_oval(pm, ht, paume.0, paume.1, paume.2, paume.3, c);
+    // Coussinet clair de la paume.
+    fill_oval_a(pm, ht, paume.0 + k * 0.1, paume.1 + k * 0.1, k * 0.38, k * 0.3, lumiere(c, 0.45), 0.5);
+}
+
+/// Bras cerné, coude marqué, terminé par une main dans l'axe de l'avant-bras.
+fn bras(pm: &mut Pixmap, t: Transform, pts: &[(f32, f32)], w: f32, c: C) {
+    lim(pm, t, pts, w * 0.92, c);
+    let (a, b) = (pts[pts.len() - 2], pts[pts.len() - 1]);
+    let dir = (b.1 - a.1).atan2(b.0 - a.0);
+    main(pm, t, b.0, b.1, dir, w * 0.62, c);
 }
 
 fn bez(p: [(f32, f32); 4], u: f32) -> (f32, f32) {
@@ -91,46 +202,89 @@ fn bez(p: [(f32, f32); 4], u: f32) -> (f32, f32) {
     (a * p[0].0 + b * p[1].0 + c * p[2].0 + d * p[3].0, a * p[0].1 + b * p[1].1 + c * p[2].1 + d * p[3].1)
 }
 
-/// Queue épaisse : contour d'encre d'un seul tenant, puis anneaux (ou couleur unie).
+/// Ruban le long des points `pts[a..=b]`, demi-largeur `hw(i)` de chaque côté de la normale.
+fn ruban(pts: &[(f32, f32)], nor: &[(f32, f32)], a: usize, b: usize, hw: &dyn Fn(usize) -> f32) -> Option<tiny_skia::Path> {
+    let mut pb = PathBuilder::new();
+    for i in a..=b {
+        let (p, n, h) = (pts[i], nor[i], hw(i));
+        if i == a {
+            pb.move_to(p.0 + n.0 * h, p.1 + n.1 * h);
+        } else {
+            pb.line_to(p.0 + n.0 * h, p.1 + n.1 * h);
+        }
+    }
+    for i in (a..=b).rev() {
+        let (p, n, h) = (pts[i], nor[i], hw(i));
+        pb.line_to(p.0 - n.0 * h, p.1 - n.1 * h);
+    }
+    pb.close();
+    pb.finish()
+}
+
+/// Queue épaisse : un ruban rempli (quelques remplissages au lieu de dizaines de traits),
+/// anneaux ou bout coloré, bouts arrondis.
 fn queue(pm: &mut Pixmap, t: Transform, pal: &Pal, ctrl: [(f32, f32); 4]) {
     let k = pal.tail_len;
     let o = ctrl[0];
     let ctrl = ctrl.map(|p| (o.0 + (p.0 - o.0) * k, o.1 + (p.1 - o.1) * k));
-    let n = if k < 0.3 { 5 } else { 28 };
+    let n = if k < 0.3 { 6 } else { 28 };
     let w0 = pal.tail_w * 1.25;
     let largeur = |u: f32| if pal.tail_w > 11.0 { w0 * (0.75 + 0.45 * (u * PI).sin()) } else { w0 * (1.0 - 0.18 * u) };
     let pts: Vec<(f32, f32)> = (0..=n).map(|i| bez(ctrl, i as f32 / n as f32)).collect();
-    for i in 1..=n {
-        let u = i as f32 / n as f32;
-        stroke(pm, t, &[pts[i - 1], pts[i]], largeur(u) + 2.0 * OW, INK, LineCap::Round);
+    let nor: Vec<(f32, f32)> = (0..=n)
+        .map(|i: usize| {
+            let (a, b) = (pts[i.saturating_sub(1)], pts[(i + 1).min(n)]);
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let l = (dx * dx + dy * dy).sqrt().max(1e-3);
+            (-dy / l, dx / l)
+        })
+        .collect();
+    let hw = |i: usize| largeur(i as f32 / n as f32) / 2.0;
+    let (base, autre) = match pal.queue {
+        Queue::Annelee(a, b) => (a, b),
+        Queue::Unie(a, tip) => (a, tip),
+    };
+    let fonce = if base.0 as u32 + base.1 as u32 + base.2 as u32 > autre.0 as u32 + autre.1 as u32 + autre.2 as u32 { autre } else { base };
+    let disque = |pm: &mut Pixmap, i: usize, r: f32, c: C| fill_oval(pm, t, pts[i].0, pts[i].1, r, r, c);
+    // Contour d'un seul tenant, bouts arrondis.
+    if let Some(p) = ruban(&pts, &nor, 0, n, &|i| hw(i) + OW) {
+        pm.fill_path(&p, &paint(bord(fonce)), FillRule::Winding, t, None);
     }
-    for i in 1..=n {
-        let u = i as f32 / n as f32;
-        let col = match pal.queue {
-            // Anneaux réguliers, bout sombre.
-            Queue::Annelee(a, b) => {
-                if i > n - 2 || ((i - 1) / 2) % 2 == 1 { b } else { a }
-            }
-            Queue::Unie(a, tip) => {
-                if u > 0.85 { tip } else { a }
-            }
-        };
-        let cap = if i == n { LineCap::Round } else { LineCap::Butt };
-        stroke(pm, t, &[pts[i - 1], pts[i]], largeur(u), col, cap);
+    disque(pm, 0, hw(0) + OW, bord(fonce));
+    disque(pm, n, hw(n) + OW, bord(fonce));
+    if let Some(p) = ruban(&pts, &nor, 0, n, &hw) {
+        pm.fill_path(&p, &paint(base), FillRule::Winding, t, None);
     }
-    // Petit bout arrondi au départ, sous le corps.
-    fill_oval(pm, t, pts[0].0, pts[0].1, largeur(0.0) / 2.0, largeur(0.0) / 2.0, match pal.queue {
-        Queue::Annelee(a, _) => a,
-        Queue::Unie(a, _) => a,
-    });
+    disque(pm, 0, hw(0), base);
+    // Anneaux (ou bout) : les tronçons de même couleur forment un seul morceau.
+    let teinte = |i: usize| match pal.queue {
+        Queue::Annelee(..) => i > n - 2 || ((i - 1) / 2) % 2 == 1,
+        Queue::Unie(..) => i as f32 / n as f32 > 0.85,
+    };
+    let mut i = 1;
+    while i <= n {
+        if teinte(i) {
+            let debut = i - 1;
+            while i < n && teinte(i + 1) {
+                i += 1;
+            }
+            if let Some(p) = ruban(&pts, &nor, debut, i, &|j| hw(j) + 0.25) {
+                pm.fill_path(&p, &paint(autre), FillRule::Winding, t, None);
+            }
+        }
+        i += 1;
+    }
+    disque(pm, n, hw(n), if teinte(n) { autre } else { base });
+    let _ = w0;
 }
 
-/// Un œil de trois quarts : tache sombre, iris orangé cerclé, pupille, reflet.
+/// Un œil de trois quarts : tache sombre, iris lumineux en dégradé, grande pupille, deux reflets.
 #[allow(clippy::too_many_arguments)]
 fn oeil(pm: &mut Pixmap, t: Transform, pal: &Pal, x: f32, y: f32, r: f32, tache: bool, blink: bool, expr: Expr, sleepy: bool, regard: (f32, f32)) {
     if tache && !pal.face_dark {
-        // Tache sombre en goutte, pointe vers le museau.
+        // Tache sombre en goutte, pointe vers le museau, bord adouci.
         let tt = t.pre_concat(Transform::from_rotate_at(-25.0, x, y));
+        fill_oval_a(pm, tt, x, y + r * 0.15, r * 1.6, r * 1.45, pal.black, 0.35);
         fill_oval(pm, tt, x, y + r * 0.15, r * 1.45, r * 1.3, pal.black);
     }
     let lid = if pal.face_dark { (90, 84, 80) } else { pal.cream };
@@ -146,14 +300,17 @@ fn oeil(pm: &mut Pixmap, t: Transform, pal: &Pal, x: f32, y: f32, r: f32, tache:
         return;
     }
     let ri = if matches!(expr, Expr::Surprised) { r * 1.12 } else { r };
-    fill_oval(pm, t, x, y, ri + 0.9, ri + 0.9, INK);
-    let sombre = (pal.eye.0.saturating_sub(60), pal.eye.1.saturating_sub(70), pal.eye.2.saturating_sub(20));
-    fill_oval(pm, t, x, y, ri, ri, sombre);
-    fill_oval(pm, t, x - ri * 0.08, y - ri * 0.08, ri * 0.78, ri * 0.78, pal.eye);
-    let pr = if matches!(expr, Expr::Surprised) { ri * 0.3 } else { ri * 0.42 };
-    let (px, py) = (x + regard.0 * ri * 0.35, y + regard.1 * ri * 0.3);
-    fill_oval(pm, t, px, py, pr, pr * 1.05, (14, 10, 10));
-    fill_oval(pm, t, px + pr * 0.55, py - pr * 0.6, pr * 0.45, pr * 0.45, (255, 255, 255));
+    fill_oval(pm, t, x, y, ri + 0.75, ri + 0.75, ombre(pal.eye, 0.8));
+    // Iris : bord sombre, couleur, lueur claire en bas (la lumière traverse l'œil).
+    fill_oval(pm, t, x, y, ri, ri, ombre(pal.eye, 0.4));
+    fill_oval(pm, t, x, y + ri * 0.1, ri * 0.82, ri * 0.82, pal.eye);
+    fill_oval_a(pm, t, x, y + ri * 0.45, ri * 0.55, ri * 0.3, lumiere(pal.eye, 0.5), 0.75);
+    let pr = if matches!(expr, Expr::Surprised) { ri * 0.34 } else { ri * 0.5 };
+    let (px, py) = (x + regard.0 * ri * 0.3, y + regard.1 * ri * 0.28);
+    fill_oval(pm, t, px, py, pr, pr * 1.05, (14, 10, 12));
+    // Deux reflets : le grand (fenêtre) et un petit en bas, qui rendent l'œil « vivant ».
+    fill_oval(pm, t, px + pr * 0.45, py - pr * 0.55, pr * 0.5, pr * 0.46, (255, 255, 255));
+    fill_oval_a(pm, t, x - ri * 0.42, y + ri * 0.45, ri * 0.16, ri * 0.14, (255, 255, 255), 0.85);
     if sleepy && !matches!(expr, Expr::Surprised) {
         // Espèce nocturne en plein jour : paupière lourde.
         if let Some(rc) = Rect::from_xywh(x - ri - 1.0, y - ri - 1.0, ri * 2.0 + 2.0, ri * 0.95) {
@@ -166,26 +323,31 @@ fn oeil(pm: &mut Pixmap, t: Transform, pal: &Pal, x: f32, y: f32, r: f32, tache:
 /// Tête de trois quarts, regard vers la droite. `(x, y)` : centre du crâne.
 #[allow(clippy::too_many_arguments)]
 fn tete(pm: &mut Pixmap, t: Transform, pal: &Pal, x: f32, y: f32, blink: bool, expr: Expr, att: Attitude, sleepy: bool, time: f32) {
+    // Tête un peu plus grosse : proportions de bébé, plus attendrissantes.
+    let t = t.pre_translate(x, y).pre_scale(1.08, 1.08).pre_translate(-x, -y);
     let r = 16.5;
     // Collerette (indri, vari).
     if pal.ruff {
         let ruff = if pal.fur_dark.0 < 60 && pal.fur.0 > 200 { pal.cream } else { pal.fur_dark };
-        for k in 0..10 {
-            let a = k as f32 * PI / 5.0;
-            ov(pm, t, x - 1.0 + a.cos() * (r - 1.0), y + 3.0 + a.sin() * (r - 3.0), 6.5, 6.5, ruff);
-        }
+        let ronds: Vec<(f32, f32, f32)> = (0..10)
+            .map(|k| {
+                let a = k as f32 * PI / 5.0;
+                (x - 1.0 + a.cos() * (r - 0.5), y + 3.0 + a.sin() * (r - 2.5), 6.8)
+            })
+            .collect();
+        duvet(pm, t, &ronds, ruff);
     }
     // Oreilles (couchées en arrière quand il s'inquiète ou boude).
     let couche = matches!(expr, Expr::Worried) || att == Attitude::Boude;
-    let inner = if pal.face_dark { pal.fur_dark } else { pal.fur_dark };
-    let bord = if pal.ears == Oreilles::Pointues && !pal.face_dark { pal.cream } else { pal.ear_color };
+    let inner = pal.fur_dark;
+    let bord_o = if pal.ears == Oreilles::Pointues && !pal.face_dark { pal.cream } else { pal.ear_color };
     for (ex, ang, echelle) in [(-11.0f32, -28.0f32, 0.9f32), (8.0, 22.0, 1.0)] {
         let a = if couche { ang - 35.0 * ex.signum() } else { ang };
         let et = t.pre_concat(Transform::from_rotate_at(a, x + ex, y - r * 0.55));
         match pal.ears {
             Oreilles::Pointues => {
                 let (h, l) = (13.0 * echelle, 7.5 * echelle);
-                poly(pm, et, &[(x + ex - l, y - r * 0.4), (x + ex - l * 0.35, y - r * 0.55 - h), (x + ex + l * 0.35, y - r * 0.55 - h), (x + ex + l, y - r * 0.4)], bord, true);
+                poly(pm, et, &[(x + ex - l, y - r * 0.4), (x + ex - l * 0.35, y - r * 0.55 - h), (x + ex + l * 0.35, y - r * 0.55 - h), (x + ex + l, y - r * 0.4)], bord_o, true);
                 poly(pm, et, &[(x + ex - l * 0.55, y - r * 0.45), (x + ex - l * 0.2, y - r * 0.5 - h * 0.75), (x + ex + l * 0.2, y - r * 0.5 - h * 0.75), (x + ex + l * 0.55, y - r * 0.45)], inner, false);
             }
             Oreilles::Rondes => {
@@ -194,24 +356,35 @@ fn tete(pm: &mut Pixmap, t: Transform, pal: &Pal, x: f32, y: f32, blink: bool, e
             }
             Oreilles::Grandes => {
                 ov(pm, et, x + ex * 1.15, y - r * 1.0, 10.0 * echelle, 13.5 * echelle, pal.ear_color);
-                let clair = (pal.ear_color.0.saturating_add(50), pal.ear_color.1.saturating_add(36), pal.ear_color.2.saturating_add(36));
-                fill_oval(pm, et, x + ex * 1.15, y - r * 0.95, 6.0 * echelle, 9.5 * echelle, clair);
+                // Intérieur rosé, un peu translucide, comme une vraie oreille de petit lémurien.
+                let clair = mix(lumiere(pal.ear_color, 0.25), (226, 150, 150), 0.35);
+                douce(pm, et, x + ex * 1.15, y - r * 0.95, 6.0 * echelle, 9.5 * echelle, clair);
             }
         }
+    }
+    // Favoris : duvet de joue qui dépasse à l'arrière (clair si le masque l'est).
+    let face = if pal.face_dark { pal.black } else { pal.cream };
+    if !pal.ruff {
+        let joue = if pal.face_dark { pal.fur } else { pal.cream };
+        duvet(pm, t, &[(x - 14.0, y + 4.0, 4.0), (x - 12.0, y + 9.5, 4.3)], joue);
     }
     // Crâne.
     ov(pm, t, x, y, r, r * 0.92, pal.fur);
     if let Some(cap) = pal.cap {
-        fill_oval(pm, t, x - 1.0, y - r * 0.55, r * 0.8, r * 0.42, cap);
+        douce(pm, t, x - 1.0, y - r * 0.55, r * 0.8, r * 0.42, cap);
     } else if !pal.face_dark {
         // Calotte plus sombre (catta : sommet gris foncé).
-        fill_oval(pm, t, x - 1.0, y - r * 0.55, r * 0.72, r * 0.4, pal.fur_dark);
+        douce(pm, t, x - 1.0, y - r * 0.55, r * 0.72, r * 0.4, pal.fur_dark);
     }
     // Masque du visage.
-    let face = if pal.face_dark { pal.black } else { pal.cream };
-    fill_oval(pm, t, x + 3.0, y + 3.0, r * 0.86, r * 0.72, face);
-    // Yeux : le lointain (plus petit) puis le proche.
-    let er = 4.4 * pal.eye_r;
+    douce(pm, t, x + 3.0, y + 3.0, r * 0.86, r * 0.72, face);
+    // Joues roses, très légères.
+    let rose = (238, 132, 146);
+    let a_rose = if pal.face_dark { 0.22 } else { 0.32 };
+    fill_oval_a(pm, t, x + 14.0, y + 7.5, 3.4, 2.2, rose, a_rose);
+    fill_oval_a(pm, t, x - 4.5, y + 7.0, 2.4, 1.8, rose, a_rose * 0.7);
+    // Yeux : le lointain (plus petit) puis le proche, plus grands qu'avant.
+    let er = 4.4 * pal.eye_r * 1.12;
     let regard = if att == Attitude::Boude { (-0.6, 0.2) } else { (0.5, 0.0) };
     oeil(pm, t, pal, x - 2.5, y + 0.5, er * 0.88, true, blink, expr, sleepy, regard);
     oeil(pm, t, pal, x + 9.5, y + 0.5, er, true, blink, expr, sleepy, regard);
@@ -224,14 +397,23 @@ fn tete(pm: &mut Pixmap, t: Transform, pal: &Pal, x: f32, y: f32, blink: bool, e
         stroke(pm, t, &[(x - 7.0, y - 5.0), (x + 0.5, y - 7.5)], 1.6, brow, LineCap::Round);
         stroke(pm, t, &[(x + 6.0, y - 7.5), (x + 13.5, y - 5.0)], 1.6, brow, LineCap::Round);
     }
-    // Museau et truffe.
+    // Museau et truffe arrondie, avec un reflet humide.
     let m = pal.muzzle;
     let (nx, ny) = (x + 4.0 + 3.5 * m, y + 7.5 + 2.0 * m);
     if !pal.face_dark {
-        poly(pm, t, &[(x + 2.0, y + 2.0), (x + 6.0, y + 2.0), (nx + 2.5, ny - 1.0), (nx - 2.5, ny - 1.0)], pal.fur_dark, false);
+        poly(pm, t, &[(x + 2.0, y + 2.0), (x + 6.0, y + 2.0), (nx + 2.5, ny - 1.0), (nx - 2.5, ny - 1.0)], mix(pal.fur_dark, pal.cream, 0.15), false);
     }
-    fill_oval(pm, t, nx, ny, 3.0, 2.1, (20, 16, 18));
-    fill_oval(pm, t, nx + 0.8, ny - 0.7, 0.9, 0.6, (120, 110, 110));
+    let (w, h) = (3.3, 2.6);
+    let mut pb = PathBuilder::new();
+    pb.move_to(nx - w, ny - h * 0.35);
+    pb.quad_to(nx, ny - h * 1.15, nx + w, ny - h * 0.35);
+    pb.quad_to(nx + w * 0.7, ny + h * 0.55, nx, ny + h * 0.7);
+    pb.quad_to(nx - w * 0.7, ny + h * 0.55, nx - w, ny - h * 0.35);
+    pb.close();
+    if let Some(path) = pb.finish() {
+        pm.fill_path(&path, &paint((30, 22, 26)), FillRule::Winding, t, None);
+    }
+    fill_oval_a(pm, t, nx - 0.6, ny - h * 0.45, 1.3, 0.6, (200, 190, 196), 0.8);
     // Bouche.
     let ouverte = matches!(att, Attitude::Parle | Attitude::Danse | Attitude::Fier) || matches!(expr, Expr::Happy | Expr::Surprised);
     let mouth = if pal.face_dark { (200, 190, 182) } else { INK };
@@ -246,21 +428,32 @@ fn tete(pm: &mut Pixmap, t: Transform, pal: &Pal, x: f32, y: f32, blink: bool, e
         stroke(pm, t, &[(mx, my - 1.4), (mx, my + 1.4)], 0.8, mouth, LineCap::Round);
     } else if ouverte {
         let parle = if att == Attitude::Parle { 0.6 + 0.4 * (time * 9.0).sin().abs() } else { 1.0 };
-        let (mx, my) = (nx - 0.5, ny + 3.0);
-        let h = 4.2 * parle;
-        poly(pm, t, &[(mx - 4.0, my), (mx + 4.0, my), (mx + 2.4, my + h), (mx - 2.4, my + h)], (120, 40, 44), true);
-        fill_oval(pm, t, mx, my + h * 0.72, 2.2, 1.2 * parle.max(0.5), (236, 120, 130));
+        let (mx, my) = (nx - 0.5, ny + 3.2);
+        let hh = 4.2 * parle;
+        // Bouche ronde (« o » ou sourire ouvert) avec la langue.
+        let mut pb = PathBuilder::new();
+        pb.move_to(mx - 3.8, my);
+        pb.quad_to(mx, my - 0.8, mx + 3.8, my);
+        pb.quad_to(mx + 2.6, my + hh * 1.15, mx, my + hh);
+        pb.quad_to(mx - 2.6, my + hh * 1.15, mx - 3.8, my);
+        pb.close();
+        if let Some(path) = pb.finish() {
+            pm.stroke_path(&path, &paint(mouth), &Stroke { width: 1.0, line_join: tiny_skia::LineJoin::Round, ..Default::default() }, t, None);
+            pm.fill_path(&path, &paint((110, 36, 46)), FillRule::Winding, t, None);
+        }
+        fill_oval(pm, t, mx, my + hh * 0.72, 2.2, 1.2 * parle.max(0.5), (236, 120, 130));
     } else {
-        stroke(pm, t, &[(nx - 3.0, ny + 3.6), (nx, ny + 4.6), (nx + 2.5, ny + 3.4)], 1.0, mouth, LineCap::Round);
+        // Petite bouche en ω sous la truffe.
+        stroke(pm, t, &[(nx, ny + 1.6), (nx, ny + 3.2)], 0.9, mouth, LineCap::Round);
+        stroke(pm, t, &[(nx - 2.8, ny + 2.7), (nx - 1.4, ny + 4.4), (nx, ny + 3.2)], 0.9, mouth, LineCap::Round);
+        stroke(pm, t, &[(nx, ny + 3.2), (nx + 1.4, ny + 4.4), (nx + 2.8, ny + 2.7)], 0.9, mouth, LineCap::Round);
     }
 }
 
 /// Bras croisés devant la poitrine.
 fn bras_croises(pm: &mut Pixmap, t: Transform, pal: &Pal, cx: f32, cy: f32) {
-    lim(pm, t, &[(cx - 10.0, cy - 2.0), (cx + 2.0, cy + 6.0), (cx + 12.0, cy + 1.0)], 6.0, pal.fur_dark);
-    lim(pm, t, &[(cx + 11.0, cy - 3.0), (cx - 1.0, cy + 3.0), (cx - 10.0, cy + 1.0)], 6.0, pal.fur);
-    patte(pm, t, cx + 12.5, cy + 0.5, 3.4, 3.0, pal.fur_dark);
-    patte(pm, t, cx - 11.0, cy, 3.4, 3.0, pal.fur);
+    bras(pm, t, &[(cx - 10.0, cy - 2.0), (cx + 2.0, cy + 6.0), (cx + 12.0, cy + 1.0)], 6.0, pal.fur_dark);
+    bras(pm, t, &[(cx + 11.0, cy - 3.0), (cx - 1.0, cy + 3.0), (cx - 10.0, cy + 1.0)], 6.0, pal.fur);
 }
 
 /// Dessine le maki. `base` place l'origine (entre les pieds) avec l'échelle et la direction.
@@ -297,30 +490,25 @@ pub fn maki(pm: &mut Pixmap, base: Transform, p: &Pose, pal: &Pal, att: Attitude
             // Corps et ventre.
             let bt = t.pre_concat(Transform::from_rotate_at(if danse { k * 6.0 } else { 0.0 }, 0.0, -30.0));
             ov(pm, bt, 0.0, -45.0 + h, 13.5, 21.0, fur);
-            fill_oval(pm, bt, 4.0, -43.0 + h, 7.5, 16.0, cream);
+            douce(pm, bt, 4.0, -43.0 + h, 7.5, 16.0, cream);
             let (sx, sy) = (2.0, -58.0 + h);
             match att {
                 Attitude::Boude => bras_croises(pm, bt, pal, 2.0, -48.0 + h),
                 Attitude::Fier => {
                     // Mains sur les hanches.
                     lim(pm, bt, &[(sx - 9.0, sy), (sx - 20.0, sy + 9.0), (sx - 11.0, sy + 18.0)], 5.5, dark);
-                    lim(pm, bt, &[(sx + 9.0, sy), (sx + 21.0, sy + 9.0), (sx + 12.0, sy + 18.0)], 5.5, fur);
-                    patte(pm, bt, sx + 11.0, sy + 18.0, 3.2, 3.0, fur);
+                    bras(pm, bt, &[(sx + 9.0, sy), (sx + 21.0, sy + 9.0), (sx + 12.0, sy + 18.0)], 5.5, fur);
                 }
                 Attitude::Danse => {
                     let a = 0.5 + 0.5 * (p.time * 6.0).sin();
-                    lim(pm, bt, &[(sx - 8.0, sy), (sx - 16.0, sy + 10.0), (sx - 8.0, sy + 16.0)], 5.5, dark);
-                    patte(pm, bt, sx - 7.5, sy + 16.0, 3.2, 3.0, dark);
-                    lim(pm, bt, &[(sx + 9.0, sy), (sx + 20.0, sy - 6.0 - 6.0 * a), (sx + 26.0, sy - 18.0 - 6.0 * a)], 5.5, fur);
-                    patte(pm, bt, sx + 26.5, sy - 19.5 - 6.0 * a, 3.6, 3.4, fur);
+                    bras(pm, bt, &[(sx - 8.0, sy), (sx - 16.0, sy + 10.0), (sx - 8.0, sy + 16.0)], 5.5, dark);
+                    bras(pm, bt, &[(sx + 9.0, sy), (sx + 20.0, sy - 6.0 - 6.0 * a), (sx + 26.0, sy - 18.0 - 6.0 * a)], 5.5, fur);
                 }
                 _ => {
                     // Il parle : une main accompagne ce qu'il dit.
                     let g = (p.time * 2.4).sin();
-                    lim(pm, bt, &[(sx - 8.0, sy), (sx - 12.0, sy + 14.0), (sx - 9.0, sy + 24.0)], 5.5, dark);
-                    patte(pm, bt, sx - 9.0, sy + 24.5, 3.2, 3.0, dark);
-                    lim(pm, bt, &[(sx + 9.0, sy), (sx + 20.0, sy + 6.0), (sx + 25.0, sy - 2.0 + g * 4.0)], 5.5, fur);
-                    patte(pm, bt, sx + 26.0, sy - 3.0 + g * 4.0, 3.4, 3.2, fur);
+                    bras(pm, bt, &[(sx - 8.0, sy), (sx - 12.0, sy + 14.0), (sx - 9.0, sy + 24.0)], 5.5, dark);
+                    bras(pm, bt, &[(sx + 9.0, sy), (sx + 20.0, sy + 6.0), (sx + 25.0, sy - 2.0 + g * 4.0)], 5.5, fur);
                 }
             }
             tete(pm, bt.pre_concat(Transform::from_rotate_at(-p.look_up * 20.0, 2.0, -80.0)), pal, 2.0, -80.0 + h, p.blink, p.expr, att, p.sleepy, p.time);
@@ -328,7 +516,7 @@ pub fn maki(pm: &mut Pixmap, base: Transform, p: &Pose, pal: &Pal, att: Attitude
         PoseKind::Sleep => {
             // Boule endormie, queue enroulée autour.
             ov(pm, t, 0.0, -15.0, 27.0, 15.0, fur);
-            fill_oval(pm, t, 6.0, -9.0, 17.0, 6.0, cream);
+            douce(pm, t, 6.0, -9.0, 17.0, 6.0, cream);
             queue(pm, t, pal, [(-24.0, -10.0), (-40.0, 4.0), (10.0, 6.0), (34.0, -2.0)]);
             tete(pm, t.pre_concat(Transform::from_rotate_at(16.0, 22.0, -20.0)), pal, 22.0, -20.0, true, Expr::Normal, Attitude::Aucune, false, p.time);
         }
@@ -342,24 +530,21 @@ pub fn maki(pm: &mut Pixmap, base: Transform, p: &Pose, pal: &Pal, att: Attitude
             // Cuisses, corps en poire, ventre.
             ov(pm, t, -6.0, -14.0, 15.0, 12.0, dark);
             ov(pm, t, 0.0, -36.0, 16.5, 25.0, fur);
-            fill_oval(pm, t, 5.0, -33.0, 9.0, 19.0, cream);
+            douce(pm, t, 5.0, -33.0, 9.0, 19.0, cream);
             ov(pm, t, 6.0, -12.0, 12.0, 9.5, fur);
             patte(pm, t, 12.0, -2.5, 6.0, 3.0, dark);
             patte(pm, t, 20.0, -2.5, 6.0, 3.0, fur);
             let occupe = p.wave != 0.0 || p.scratch != 0.0 || p.point || p.tap != 0.0;
             // Bras : l'arrière repose, l'avant est libre ou occupé.
-            lim(pm, t, &[(-2.0, -48.0), (2.0, -32.0), (10.0, -20.0)], 5.5, dark);
-            patte(pm, t, 11.0, -19.0, 3.4, 3.0, dark);
+            bras(pm, t, &[(-2.0, -48.0), (-5.0, -30.0), (9.0, -22.0)], 5.5, dark);
             let (sx, sy) = (8.0, -48.0);
             if p.wave != 0.0 {
                 let ang = (-70.0 + p.wave * 25.0f32).to_radians();
                 let coude = (sx + 12.0, sy - 2.0);
                 let main = (coude.0 + ang.cos() * 17.0, coude.1 + ang.sin() * 17.0);
-                lim(pm, t, &[(sx, sy), coude, main], 5.5, fur);
-                patte(pm, t, main.0, main.1, 3.6, 3.4, fur);
+                bras(pm, t, &[(sx, sy), coude, main], 5.5, fur);
             } else if p.point {
-                lim(pm, t, &[(sx, sy), (sx + 12.0, sy - 12.0), (sx + 14.0, sy - 32.0)], 5.5, fur);
-                patte(pm, t, sx + 14.0, sy - 33.0, 3.6, 3.4, fur);
+                bras(pm, t, &[(sx, sy), (sx + 12.0, sy - 12.0), (sx + 14.0, sy - 32.0)], 5.5, fur);
                 let k = (p.time * 6.0).sin() * 0.3 + 1.0;
                 for a in 0..4 {
                     let ang = a as f32 * FRAC_PI_2 + p.time;
@@ -371,11 +556,9 @@ pub fn maki(pm: &mut Pixmap, base: Transform, p: &Pose, pal: &Pal, att: Attitude
                 let tip = (sx + 36.0, -1.0 - p.tap.max(0.0) * 5.0);
                 ink(pm, t, &[(sx + 22.0, -14.0), tip], 1.6);
             } else if p.scratch != 0.0 {
-                lim(pm, t, &[(sx, sy), (sx + 10.0, sy - 18.0), (sx - 2.0 + p.scratch * 3.0, sy - 36.0)], 5.5, fur);
-                patte(pm, t, sx - 2.0 + p.scratch * 3.0, sy - 37.0, 3.4, 3.2, fur);
+                bras(pm, t, &[(sx, sy), (sx + 10.0, sy - 18.0), (sx - 2.0 + p.scratch * 3.0, sy - 36.0)], 5.5, fur);
             } else if !occupe {
-                lim(pm, t, &[(sx, sy), (sx + 8.0, sy + 14.0), (sx + 14.0, sy + 27.0)], 5.5, fur);
-                patte(pm, t, sx + 15.0, sy + 28.0, 3.4, 3.0, fur);
+                bras(pm, t, &[(sx, sy), (sx + 15.0, sy + 11.0), (sx + 13.0, sy + 27.0)], 5.5, fur);
             }
             tete(pm, t.pre_concat(Transform::from_rotate_at(-p.look_up * 25.0, 4.0, -70.0)), pal, 4.0, -70.0, p.blink, p.expr, att, p.sleepy, p.time);
         }
@@ -386,22 +569,18 @@ pub fn maki(pm: &mut Pixmap, base: Transform, p: &Pose, pal: &Pal, att: Attitude
             let kick = (p.time * 5.0).sin() * 4.0;
             queue(pm, t, pal, [(-2.0, -26.0), (-12.0 + tx * 0.4, 4.0), (14.0 + tx, 24.0 + ty * 0.3), (0.0 + tx * 1.4, 48.0)]);
             if arms_up {
-                lim(pm, t, &[(-10.0, -58.0), (-17.0, g + 14.0), (-12.0, g + 3.0)], 6.0, dark);
-                patte(pm, t, -12.0, g + 2.0, 3.8, 3.6, dark);
-                lim(pm, t, &[(12.0, -58.0), (19.0, g + 14.0), (14.0, g + 3.0)], 6.0, fur);
-                patte(pm, t, 14.0, g + 2.0, 3.8, 3.6, fur);
+                bras(pm, t, &[(-10.0, -58.0), (-17.0, g + 14.0), (-12.0, g + 3.0)], 6.0, dark);
+                bras(pm, t, &[(12.0, -58.0), (19.0, g + 14.0), (14.0, g + 3.0)], 6.0, fur);
             }
             lim(pm, t, &[(-6.0, -28.0), (-10.0 - kick, -14.0), (-8.0 - kick, -4.0)], 7.0, dark);
             patte(pm, t, -8.0 - kick, -3.0, 4.6, 2.9, dark);
             ov(pm, t, 0.0, -44.0, 15.0, 22.0, fur);
-            fill_oval(pm, t, 4.0, -42.0, 7.5, 15.0, cream);
+            douce(pm, t, 4.0, -42.0, 7.5, 15.0, cream);
             lim(pm, t, &[(6.0, -28.0), (12.0 + kick, -14.0), (10.0 + kick, -4.0)], 7.0, fur);
             patte(pm, t, 10.0 + kick, -3.0, 4.6, 2.9, fur);
             if !arms_up {
-                lim(pm, t, &[(-10.0, -56.0), (-15.0 + kick, -36.0)], 5.5, dark);
-                patte(pm, t, -15.0 + kick, -35.0, 3.4, 3.2, dark);
-                lim(pm, t, &[(12.0, -56.0), (17.0 - kick, -36.0)], 5.5, fur);
-                patte(pm, t, 17.0 - kick, -35.0, 3.4, 3.2, fur);
+                bras(pm, t, &[(-10.0, -56.0), (-18.0 + kick * 0.5, -47.0), (-15.0 + kick, -36.0)], 5.5, dark);
+                bras(pm, t, &[(12.0, -56.0), (20.0 - kick * 0.5, -47.0), (17.0 - kick, -36.0)], 5.5, fur);
             }
             tete(pm, t, pal, 3.0, -72.0, p.blink, p.expr, att, p.sleepy, p.time);
         }
@@ -409,18 +588,14 @@ pub fn maki(pm: &mut Pixmap, base: Transform, p: &Pose, pal: &Pal, att: Attitude
             // Agrippé à la liane devant lui, une main après l'autre.
             let a = p.walk_phase.sin();
             queue(pm, t, pal, [(-6.0, -30.0), (-16.0 + tx * 0.3, -6.0), (-22.0 + tx * 0.6, 14.0), (-12.0 + tx, 34.0)]);
-            lim(pm, t, &[(-2.0, -26.0), (-6.0, -16.0 + 3.0 * a), (10.0, -10.0 + 4.0 * a)], 6.0, dark);
-            patte(pm, t, 11.0, -10.0 + 4.0 * a, 3.4, 4.0, dark);
-            lim(pm, t, &[(4.0, -62.0), (10.0, -80.0), (12.0, -94.0 - 8.0 * a)], 5.5, dark);
-            patte(pm, t, 12.0, -95.0 - 8.0 * a, 3.6, 3.4, dark);
+            bras(pm, t, &[(-2.0, -26.0), (-6.0, -16.0 + 3.0 * a), (10.0, -10.0 + 4.0 * a)], 6.0, dark);
+            bras(pm, t, &[(4.0, -62.0), (10.0, -80.0), (12.0, -94.0 - 8.0 * a)], 5.5, dark);
             let bt = t.pre_concat(Transform::from_rotate_at(-8.0, 0.0, -48.0));
             ov(pm, bt, 0.0, -48.0, 14.5, 24.0, fur);
-            fill_oval(pm, bt, 6.0, -46.0, 6.5, 16.0, cream);
-            lim(pm, t, &[(4.0, -28.0), (-2.0, -20.0 - 3.0 * a), (10.0, -22.0 - 4.0 * a)], 6.0, fur);
-            patte(pm, t, 11.0, -22.0 - 4.0 * a, 3.4, 4.0, fur);
+            douce(pm, bt, 6.0, -46.0, 6.5, 16.0, cream);
+            bras(pm, t, &[(4.0, -28.0), (-2.0, -20.0 - 3.0 * a), (10.0, -22.0 - 4.0 * a)], 6.0, fur);
             tete(pm, t.pre_concat(Transform::from_rotate_at(-22.0, 4.0, -82.0)), pal, 4.0, -82.0, p.blink, p.expr, att, p.sleepy, p.time);
-            lim(pm, t, &[(7.0, -62.0), (12.0, -70.0), (13.0, -78.0 + 8.0 * a)], 5.5, fur);
-            patte(pm, t, 13.0, -79.0 + 8.0 * a, 3.6, 3.4, fur);
+            bras(pm, t, &[(7.0, -62.0), (12.0, -70.0), (13.0, -78.0 + 8.0 * a)], 5.5, fur);
         }
         PoseKind::Upright => {
             // Debout en équilibre (propithèque, indri) : bras levés, jambes fléchies.
@@ -430,15 +605,13 @@ pub fn maki(pm: &mut Pixmap, base: Transform, p: &Pose, pal: &Pal, att: Attitude
             lim(pm, t, &[(-6.0, -26.0), (-2.0 + bend, -14.0), (-8.0, -3.0)], 6.5, dark);
             patte(pm, t, -6.0, -2.0, 5.0, 2.6, dark);
             ov(pm, t, 0.0, -46.0, 15.5, 23.0, fur);
-            fill_oval(pm, t, 5.0, -44.0, 8.0, 16.0, cream);
+            douce(pm, t, 5.0, -44.0, 8.0, 16.0, cream);
             lim(pm, t, &[(6.0, -26.0), (10.0 + bend, -14.0), (6.0, -3.0)], 6.5, fur);
             patte(pm, t, 8.0, -2.0, 5.0, 2.6, fur);
             let up = 4.0 * (p.time * 3.0).sin();
-            lim(pm, t, &[(-8.0, -58.0), (-18.0, -70.0), (-24.0, -84.0 + up)], 5.5, dark);
-            patte(pm, t, -24.0, -85.0 + up, 3.4, 3.2, dark);
+            bras(pm, t, &[(-8.0, -58.0), (-18.0, -70.0), (-24.0, -84.0 + up)], 5.5, dark);
             tete(pm, t.pre_concat(Transform::from_rotate_at(-p.look_up * 25.0, 3.0, -78.0)), pal, 3.0, -78.0, p.blink, p.expr, att, p.sleepy, p.time);
-            lim(pm, t, &[(10.0, -58.0), (20.0, -68.0), (28.0, -82.0 - up)], 5.5, fur);
-            patte(pm, t, 28.0, -83.0 - up, 3.4, 3.2, fur);
+            bras(pm, t, &[(10.0, -58.0), (20.0, -68.0), (28.0, -82.0 - up)], 5.5, fur);
         }
         PoseKind::Stretch => {
             let k = (p.walk_phase * PI).sin();
@@ -447,7 +620,7 @@ pub fn maki(pm: &mut Pixmap, base: Transform, p: &Pose, pal: &Pal, att: Attitude
             patte(pm, t, -15.0, -2.0, 5.0, 2.6, dark);
             let bt = t.pre_concat(Transform::from_rotate_at(k * 16.0, 0.0, -38.0));
             ov(pm, bt, 0.0, -40.0, 27.0 + k * 4.0, 14.0, fur);
-            fill_oval(pm, bt, 2.0, -31.0, 18.0, 5.0, cream);
+            douce(pm, bt, 2.0, -31.0, 18.0, 5.0, cream);
             lim(pm, t, &[(18.0, -36.0 + k * 10.0), (24.0 + k * 22.0, -2.0)], 6.5, fur);
             patte(pm, t, 26.0 + k * 22.0, -2.0, 5.0, 2.6, fur);
             lim(pm, t, &[(-12.0, -34.0 - k * 4.0), (-12.0, -2.0)], 7.0, fur);
@@ -481,7 +654,7 @@ pub fn maki(pm: &mut Pixmap, base: Transform, p: &Pose, pal: &Pal, att: Attitude
             jambe(pm, (17.0, -34.0), f1, dark);
             let bob = (ph * 2.0).sin().abs() * 1.5;
             ov(pm, t, 0.0, -42.0 - bob, 27.0, 15.5, fur);
-            fill_oval(pm, t, 4.0, -32.0 - bob, 18.0, 6.0, cream);
+            douce(pm, t, 4.0, -32.0 - bob, 18.0, 6.0, cream);
             jambe(pm, (-12.0, -32.0), f1, fur);
             jambe(pm, (20.0, -32.0), f2, fur);
             tete(pm, t, pal, 30.0, -58.0 - bob, p.blink, p.expr, att, p.sleepy, p.time);
@@ -514,6 +687,29 @@ pub fn maki(pm: &mut Pixmap, base: Transform, p: &Pose, pal: &Pal, att: Attitude
 mod tests {
     use super::*;
     use crate::mascot::especes::Espece;
+
+    /// Coût du dessin (pas un vrai test) : `cargo test --release cout_dessin -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn cout_dessin() {
+        let mut pm = Pixmap::new(260, 260).unwrap();
+        let poses = [PoseKind::Sit, PoseKind::Walk, PoseKind::Upright, PoseKind::Sleep];
+        let n = 120;
+        let mut meilleur = f64::MAX;
+        for _ in 0..7 {
+            let t0 = std::time::Instant::now();
+            for e in Espece::TOUTES {
+                let pal = e.pal();
+                for i in 0..n {
+                    let pose = Pose { kind: poses[i % 4], pop: 1.0, time: i as f32 * 0.05, walk_phase: i as f32 * 0.2, wave: if i % 8 == 0 { 0.5 } else { 0.0 }, ..Default::default() };
+                    pm.fill(tiny_skia::Color::TRANSPARENT);
+                    maki(&mut pm, Transform::from_translate(130.0, 240.0).pre_scale(1.5, 1.5), &pose, &pal, Attitude::Aucune);
+                }
+            }
+            meilleur = meilleur.min(t0.elapsed().as_secs_f64() * 1e6 / (n * Espece::TOUTES.len()) as f64);
+        }
+        println!("COUT_DESSIN {meilleur:.0} µs par image (260 px, échelle 1,5 ; meilleur de 7 passes)");
+    }
 
     /// Planche de contrôle (pas un vrai test) :
     /// `cargo test --release planche -- --ignored` puis voir $LKATTA_PLANCHE (PNG).

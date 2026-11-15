@@ -22,7 +22,9 @@
 - Ne pas tester en changeant de bureau virtuel ni en injectant des touches : l'utilisateur
   travaille sur cette machine pendant les essais.
 - Versions : chaque chiffre 0..9 (0.0.9 → 0.1.0), toujours par `tool/version.py --bump`. Feuille de route : docs/TODO.md.
-- `lkatta apercu fichier.png` dessine les poses.
+- `lkatta apercu fichier.png` dessine les poses. Dessin du maki : src/mascot/dessin.rs ; pas de
+  dégradé tiny-skia (calculés pixel par pixel, ils doublaient le coût) : le volume se fait par
+  ovales unis superposés (`volume`). Coût : `cargo test --release cout_dessin -- --ignored --nocapture`.
 - Côtés et fils (src/fils.rs) : côté Discussion (sans outils d'écriture, `brain::OUTILS_CODE`)
   et côté Code (agent, dossier de projet via `paths::set_travail`). Un fichier par fil dans
   ~/.local/share/lkatta/fils/, index léger ; la bulle ne garde que le fil ouvert.
