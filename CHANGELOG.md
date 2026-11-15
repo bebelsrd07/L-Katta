@@ -2,7 +2,7 @@
 
 Règle : chaque chiffre va de 0 à 9 (0.0.9 → 0.1.0, 0.9.9 → 1.0.0).
 
-## 0.2.9 — en cours
+## 0.2.9 — 2026-11-15
 
 - **Glisser-déposer sous X11** : un fichier glissé depuis le gestionnaire de fichiers (Thunar,
   Nemo, Caja, Dolphin…) et lâché sur le maki ou sur la bulle est joint à la question, comme
