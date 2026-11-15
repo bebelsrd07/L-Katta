@@ -13,3 +13,6 @@ repo-flatpak/
 packaging/aur/*/src/
 packaging/aur/*/pkg/
 packaging/aur/*/*.tar.*
+
+# Clés privées exportées (sauvegardes) : jamais dans Git.
+*.asc
