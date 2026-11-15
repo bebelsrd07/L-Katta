@@ -197,9 +197,11 @@ Une application généraliste qui s'adapte à chaque utilisateur. Ordre recomman
      controle.rs ; écran déduit de la position ; les conventions X11 se taisent quand un pont
      parle. Vérifié : tests du côté L Katta, syntaxe de l'extension. Reste : essai dans un vrai
      GNOME Shell (conteneur avec `gnome-shell --headless`, ou une machine GNOME) ;
-   - b. à voir : « Ne pas déranger » de GNOME (org.gnome.desktop.notifications show-banners),
-     raccourci global (org.gnome.settings-daemon custom-keybindings), échelle fractionnaire
-     (coordonnées Xwayland ≠ coordonnées GNOME).
+   - b. ✔ « Ne pas déranger » de GNOME (show-banners), raccourci global (raccourci
+     personnalisé qui lance `lkatta raccourci`, jamais à la place d'un autre), échelle
+     fractionnaire (l'extension envoie la taille de sa scène, L Katta en déduit le facteur
+     Xwayland). Vérifié : tests (notation des touches, facteur). Reste : essai réel ; la bulle
+     prend-elle le clavier sous GNOME (Mutter et SetInputFocus d'une fenêtre override-redirect) ?
 5. **Distribution** : AUR, Flatpak.
 
 ## Ensuite (0.2.x)

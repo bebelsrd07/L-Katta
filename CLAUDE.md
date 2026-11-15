@@ -73,4 +73,6 @@
 - GNOME : extension pont dans assets/gnome/<uuid>/ (embarquée par include_str!, src/gnome.rs),
   ES modules GNOME 45+. Elle envoie la fenêtre active à org.lkatta.Maki (comme le script KWin)
   et offre /org/lkatta/Gnome chez org.gnome.Shell. Toute chaîne nouvelle passe par t!() ET
-  src/lang/en_*.rs (test every_text_has_an_english_translation).
+  src/lang/en_*.rs (test every_text_has_an_english_translation). Sous GNOME, « Ne pas
+  déranger », raccourci global (raccourci personnalisé → `lkatta raccourci`) et échelle
+  (champs sw/sh de l'extension, `facteur_scene`) passent par src/gnome.rs et on_fenetre.

@@ -780,6 +780,15 @@ impl App {
 
     /// Une fenêtre devient active (script KWin, ou protocole Wayland standard ailleurs).
     fn on_fenetre(&mut self, mut f: crate::bureau::Fenetre) {
+        // Extension GNOME : coordonnées de GNOME (px logiques). Sous Xwayland mis à l'échelle
+        // (échelle fractionnaire), celles du maki sont multipliées : on convertit d'après la
+        // largeur totale des écrans.
+        if f.scene.0 > 0.0 {
+            let (min, max) = self.screens.iter().filter_map(|s| self.geom(&s.out)).fold((f32::MAX, f32::MIN), |(a, b), g| (a.min(g.0), b.max(g.0 + g.2)));
+            if let Some(k) = facteur_scene(max - min, f.scene.0) {
+                f.rect = (f.rect.0 * k, f.rect.1 * k, f.rect.2 * k, f.rect.3 * k);
+            }
+        }
         // Écran non nommé (extension GNOME) : celui qui contient le centre de la fenêtre.
         if f.ecran.is_empty() && f.rect.2 > 0.0 {
             let c = (f.rect.0 + f.rect.2 / 2.0, f.rect.1 + f.rect.3 / 2.0);
@@ -2039,7 +2048,7 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for App {
                     let ecran = sortie.and_then(|o| app.wl.as_mut().unwrap().output_state.info(&o)).and_then(|i| i.name).unwrap_or_default();
                     // Pas de géométrie dans ce protocole : rectangle vide (il n'évite pas la
                     // fenêtre et n'y grimpe pas, mais se cache en plein écran et se tait en visio).
-                    app.on_fenetre(crate::bureau::Fenetre { plein_ecran: f.plein_ecran, rect: (0.0, 0.0, 0.0, 0.0), classe: f.classe, titre: f.titre, ecran });
+                    app.on_fenetre(crate::bureau::Fenetre { plein_ecran: f.plein_ecran, rect: (0.0, 0.0, 0.0, 0.0), classe: f.classe, titre: f.titre, ecran, ..Default::default() });
                 }
             }
             E::Closed => {
@@ -2198,5 +2207,22 @@ impl App {
             }
         }
         redessiner
+    }
+}
+
+/// Facteur entre la scène de GNOME (px logiques) et les écrans vus par le maki ; `None` s'il
+/// vaut 1 (pas d'échelle) ou n'a pas de sens (écrans pas encore connus).
+pub(crate) fn facteur_scene(largeur_maki: f32, largeur_gnome: f32) -> Option<f32> {
+    let k = largeur_maki / largeur_gnome;
+    (k.is_finite() && (0.25..=4.0).contains(&k) && (k - 1.0).abs() > 0.02).then_some(k)
+}
+
+#[cfg(test)]
+mod tests_scene {
+    #[test]
+    fn gnome_scale_factor() {
+        assert_eq!(super::facteur_scene(1920.0, 1920.0), None);
+        assert_eq!(super::facteur_scene(2880.0, 1920.0), Some(1.5));
+        assert_eq!(super::facteur_scene(f32::MIN - f32::MAX, 1920.0), None);
     }
 }

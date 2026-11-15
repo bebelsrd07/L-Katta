@@ -18,6 +18,9 @@ pub struct Fenetre {
     pub classe: String,
     pub titre: String,
     pub ecran: String,
+    /// Taille de la scène de GNOME (px logiques), pour convertir sous Xwayland mis à
+    /// l'échelle ; (0, 0) : coordonnées déjà dans celles du maki.
+    pub scene: (f32, f32),
 }
 
 impl Fenetre {
@@ -31,6 +34,7 @@ impl Fenetre {
             classe: t("classe"),
             titre: t("titre"),
             ecran: t("ecran"),
+            scene: (n("sw"), n("sh")),
         })
     }
 
@@ -176,6 +180,12 @@ fn kga(method: &str, args: &[&str]) -> Option<String> {
 
 /// Enregistre le raccourci dans Plasma et attend qu'on le presse (fil dédié).
 pub fn raccourci(seq: &str, tx: impl Fn(Msg) + Send + 'static) {
+    // GNOME : raccourci personnalisé qui lance `lkatta raccourci` (pas de KGlobalAccel).
+    if crate::gnome::bureau_gnome() {
+        let seq = seq.to_string();
+        std::thread::spawn(move || crate::gnome::raccourci(&seq));
+        return;
+    }
     if !which("gdbus") {
         return;
     }
@@ -238,8 +248,11 @@ if (best) workspace.activeWindow = best;
     });
 }
 
-/// « Ne pas déranger » de Plasma activé ?
+/// « Ne pas déranger » activé (Plasma et tout service qui suit la norme ; GNOME à part) ?
 pub fn ne_pas_deranger() -> bool {
+    if crate::gnome::bureau_gnome() {
+        return crate::gnome::ne_pas_deranger();
+    }
     Command::new("gdbus")
         .args(["call", "--session", "--dest", "org.freedesktop.Notifications", "--object-path", "/org/freedesktop/Notifications", "--method", "org.freedesktop.DBus.Properties.Get", "org.freedesktop.Notifications", "Inhibited"])
         .stderr(Stdio::null())

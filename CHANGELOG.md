@@ -8,6 +8,10 @@ Règle : chaque chiffre va de 0 à 9 (0.0.9 → 0.1.0, 0.9.9 → 1.0.0).
   tes fenêtres sous GNOME (applications Wayland comprises) : il se cache devant une vidéo en
   plein écran, se tait en visio, grimpe sur les fenêtres, et peut les mettre au premier plan,
   les réduire, les agrandir ou les fermer à ta demande. `/gnome retirer` l'enlève.
+- **GNOME** : le raccourci qui ouvre la bulle (Meta+K par défaut) marche aussi sous GNOME
+  (raccourci personnalisé, visible dans Paramètres › Clavier) ; « Ne pas déranger » de GNOME
+  fait taire le maki ; avec une échelle fractionnaire (125 %, 150 %…), il trouve quand même
+  la bonne place des fenêtres.
 
 ## 0.2.9 — 2026-11-15
 

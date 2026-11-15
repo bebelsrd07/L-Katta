@@ -53,6 +53,12 @@ pub fn install() -> Result<(), String> {
     Ok(())
 }
 
+/// Le binaire à lancer depuis le bureau : celui installé, sinon celui-ci.
+pub fn lanceur() -> std::path::PathBuf {
+    let bin = paths::home_dir().join(".local/bin/lkatta");
+    if bin.exists() { bin } else { crate::paths::self_exe() }
+}
+
 /// Démarrage automatique à l'ouverture de session (fichier ~/.config/autostart/lkatta.desktop).
 pub fn sync_autostart(on: bool) -> Result<String, String> {
     let file = paths::home_dir().join(".config/autostart/lkatta.desktop");
@@ -60,8 +66,7 @@ pub fn sync_autostart(on: bool) -> Result<String, String> {
         let _ = std::fs::remove_file(&file);
         return Ok(t!("Démarrage automatique : désactivé.").into());
     }
-    let bin = paths::home_dir().join(".local/bin/lkatta");
-    let exe = if bin.exists() { bin } else { crate::paths::self_exe() };
+    let exe = lanceur();
     std::fs::create_dir_all(file.parent().unwrap()).map_err(|e| e.to_string())?;
     // Une AppImage se lance sans passer par AppImageLauncher (pas de fenêtre à chaque session).
     let exec = format!("env APPIMAGELAUNCHER_DISABLE=1 {}", exe.display());
@@ -81,6 +86,9 @@ pub fn uninstall() -> Result<(), String> {
         home.join(".local/share/icons/hicolor/256x256/apps/lkatta.png"),
     ] {
         let _ = std::fs::remove_file(p);
+    }
+    if crate::gnome::bureau_gnome() {
+        crate::gnome::retirer_raccourci();
     }
     let _ = crate::ipc::send("quitter");
     println!(

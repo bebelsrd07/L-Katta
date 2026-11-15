@@ -11,6 +11,7 @@
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const INTERFACE = `<node>
@@ -51,10 +52,13 @@ export default class LKattaExtension extends Extension {
             global.display.connect('notify::focus-window', () => this._suivre()),
             global.display.connect('in-fullscreen-changed', () => this._bientot()),
         ];
+        // Écran branché, débranché ou échelle changée : la scène change de taille.
+        this._lienEcrans = Main.layoutManager.connect('monitors-changed', () => this._bientot());
         this._suivre();
     }
 
     disable() {
+        Main.layoutManager.disconnect(this._lienEcrans);
         for (const id of this._liensBureau)
             global.display.disconnect(id);
         this._liensBureau = [];
@@ -68,7 +72,7 @@ export default class LKattaExtension extends Extension {
     }
 
     get Version() {
-        return 1;
+        return 2;
     }
 
     _lacher() {
@@ -111,7 +115,9 @@ export default class LKattaExtension extends Extension {
     }
 
     _envoyer() {
-        const d = {plein: false, x: 0, y: 0, w: 0, h: 0, classe: '', titre: '', ecran: ''};
+        // sw, sh : taille de la scène (px logiques de GNOME) ; L Katta, sous Xwayland mis à
+        // l'échelle, en déduit le facteur à appliquer.
+        const d = {plein: false, x: 0, y: 0, w: 0, h: 0, classe: '', titre: '', ecran: '', sw: global.stage.width, sh: global.stage.height};
         const w = this._fenetre;
         if (w && w.get_window_type() !== Meta.WindowType.DESKTOP) {
             const r = w.get_frame_rect();

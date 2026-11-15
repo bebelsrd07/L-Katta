@@ -109,6 +109,7 @@ fn canon(cmd: &str) -> &str {
     match cmd {
         "start" => "demarrer",
         "chat" | "panel" => "discuter",
+        "shortcut" => "raccourci",
         "ask" => "demander",
         "research" | "search" => "chercher",
         "say" => "dire",
@@ -190,7 +191,7 @@ fn main() {
             println!("{}", crate::sante::bilan_semaine());
             Ok(())
         }
-        "dire" | "discret" | "cacher" | "acrobatie" | "salut" | "quitter" | "remarque" | "arbre" | "teleporter" | "grimper" | "discuter" | "panneau" | "ecran" => {
+        "dire" | "discret" | "cacher" | "acrobatie" | "salut" | "quitter" | "remarque" | "arbre" | "teleporter" | "grimper" | "discuter" | "panneau" | "ecran" | "raccourci" => {
             ipc::send(&format!("{cmd} {rest}")).map(|r| println!("{}", if r == "ok" { r } else { lang::trd(&r).to_string() })).map_err(|_| t!("le maki ne tourne pas (lancer : lkatta)").into())
         }
         "modeles" => {

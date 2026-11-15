@@ -102,8 +102,7 @@ fn activer_gsettings() -> bool {
     if !l.iter().any(|u| u == UUID) {
         l.push(UUID.to_string());
     }
-    let v = format!("[{}]", l.iter().map(|u| format!("'{u}'")).collect::<Vec<_>>().join(", "));
-    lancer("gsettings", &["set", "org.gnome.shell", "enabled-extensions", &v])
+    lancer("gsettings", &["set", "org.gnome.shell", "enabled-extensions", &format_liste(&l)])
 }
 
 /// Installe (ou met à jour) l'extension et l'active. Renvoie le message pour l'utilisateur.
@@ -150,13 +149,112 @@ pub fn au_demarrage() -> Option<String> {
     Some(t!("Sous GNOME, je ne vois pas tes fenêtres sans une petite extension (je me cacherais devant tes vidéos en plein écran, je pourrais les manipuler à ta demande). Tape /gnome dans la bulle pour l'installer.").into())
 }
 
+/// « Ne pas déranger » de GNOME : les bannières de notification sont coupées.
+pub fn ne_pas_deranger() -> bool {
+    gsettings_get("org.gnome.desktop.notifications", "show-banners").is_some_and(|v| v.trim() == "false")
+}
+
+fn gsettings_get(schema: &str, cle: &str) -> Option<String> {
+    if !crate::config::which("gsettings") {
+        return None;
+    }
+    let o = Command::new("gsettings").args(["get", schema, cle]).stderr(Stdio::null()).output().ok()?;
+    o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+}
+
+// --- raccourci global (raccourcis personnalisés de GNOME) --------------------------------
+
+const TOUCHES: &str = "org.gnome.settings-daemon.plugins.media-keys";
+const PERSO: &str = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/lkatta/";
+
+/// « Meta+K », « Ctrl+Alt+Espace », « Meta+F2 » → « <Super>k », « <Control><Alt>space »,
+/// « <Super>F2 » (notation GTK de GNOME).
+pub fn touches_gnome(seq: &str) -> Option<String> {
+    let mut mods = String::new();
+    let mut touche = None;
+    for part in seq.split('+').map(str::trim).filter(|p| !p.is_empty()) {
+        match part.to_lowercase().as_str() {
+            "meta" | "super" | "win" => mods.push_str("<Super>"),
+            "ctrl" | "control" => mods.push_str("<Control>"),
+            "alt" => mods.push_str("<Alt>"),
+            "shift" | "maj" => mods.push_str("<Shift>"),
+            "space" | "espace" => touche = Some("space".to_string()),
+            p if p.len() == 1 && p.chars().all(|c| c.is_ascii_alphanumeric()) => touche = Some(p.to_string()),
+            p if p.starts_with('f') && p[1..].parse::<u32>().is_ok_and(|n| (1..=24).contains(&n)) => touche = Some(p.to_uppercase()),
+            _ => return None,
+        }
+    }
+    touche.map(|t| mods + &t)
+}
+
+fn perso_get(cle: &str, chemin: &str) -> Option<String> {
+    gsettings_get(&format!("{TOUCHES}.custom-keybinding:{chemin}"), cle).map(|v| v.trim_matches('\'').to_string())
+}
+
+fn perso_set(cle: &str, valeur: &str) -> bool {
+    lancer("gsettings", &["set", &format!("{TOUCHES}.custom-keybinding:{PERSO}"), cle, valeur])
+}
+
+/// Inscrit le raccourci global dans GNOME (Paramètres › Clavier › Raccourcis personnalisés) :
+/// il lance `lkatta raccourci`, qui ouvre la bulle. Vide ou « aucun » : retiré. Rien n'est
+/// réécrit s'il est déjà en place, et une combinaison déjà prise par un autre raccourci
+/// personnalisé n'est pas volée.
+pub fn raccourci(seq: &str) {
+    let seq = seq.trim();
+    if seq.is_empty() || seq == "aucun" {
+        retirer_raccourci();
+        return;
+    }
+    let Some(liste) = gsettings_get(TOUCHES, "custom-keybindings") else { return };
+    let Some(touches) = touches_gnome(seq) else {
+        eprintln!("lkatta : raccourci « {seq} » incompris (ex. Meta+K)");
+        return;
+    };
+    let mut l = liste_gsettings(&liste);
+    let prise = l.iter().filter(|c| c.as_str() != PERSO).any(|c| perso_get("binding", c).is_some_and(|b| b.eq_ignore_ascii_case(&touches)));
+    if prise {
+        eprintln!("lkatta : « {touches} » sert déjà à un autre raccourci GNOME ; le mien n'est pas posé");
+        return;
+    }
+    let commande = format!("env APPIMAGELAUNCHER_DISABLE=1 {} raccourci", crate::install::lanceur().display());
+    if perso_get("binding", PERSO).as_deref() != Some(touches.as_str()) {
+        perso_set("binding", &touches);
+    }
+    if perso_get("command", PERSO).as_deref() != Some(commande.as_str()) {
+        perso_set("command", &commande);
+    }
+    if perso_get("name", PERSO).as_deref() != Some("L Katta") {
+        perso_set("name", "L Katta");
+    }
+    if !l.iter().any(|c| c == PERSO) {
+        l.push(PERSO.to_string());
+        lancer("gsettings", &["set", TOUCHES, "custom-keybindings", &format_liste(&l)]);
+    }
+}
+
+/// Retire le raccourci de L Katta des raccourcis personnalisés de GNOME.
+pub fn retirer_raccourci() {
+    let Some(liste) = gsettings_get(TOUCHES, "custom-keybindings") else { return };
+    let l = liste_gsettings(&liste);
+    if l.iter().any(|c| c == PERSO) {
+        let reste: Vec<String> = l.into_iter().filter(|c| c != PERSO).collect();
+        lancer("gsettings", &["set", TOUCHES, "custom-keybindings", &format_liste(&reste)]);
+        for cle in ["name", "command", "binding"] {
+            lancer("gsettings", &["reset", &format!("{TOUCHES}.custom-keybinding:{PERSO}"), cle]);
+        }
+    }
+}
+
+fn format_liste(l: &[String]) -> String {
+    format!("[{}]", l.iter().map(|u| format!("'{u}'")).collect::<Vec<_>>().join(", "))
+}
+
 /// Retire l'extension (désactivée et effacée).
 pub fn retirer() -> Result<String, String> {
     let _ = lancer("gnome-extensions", &["disable", UUID]);
     if let Ok(o) = Command::new("gsettings").args(["get", "org.gnome.shell", "enabled-extensions"]).output() {
         let l: Vec<String> = liste_gsettings(&String::from_utf8_lossy(&o.stdout)).into_iter().filter(|u| u != UUID).collect();
-        let v = format!("[{}]", l.iter().map(|u| format!("'{u}'")).collect::<Vec<_>>().join(", "));
-        let _ = lancer("gsettings", &["set", "org.gnome.shell", "enabled-extensions", &v]);
+        let _ = lancer("gsettings", &["set", "org.gnome.shell", "enabled-extensions", &format_liste(&l)]);
     }
     let d = dossier();
     if d.exists() {
@@ -178,6 +276,11 @@ mod tests {
         assert!(depuis_json("pas du json").is_empty());
         assert_eq!(liste_gsettings("['a@b', 'c@d']"), vec!["a@b", "c@d"]);
         assert!(liste_gsettings("@as []").is_empty());
+        assert_eq!(touches_gnome("Meta+K").as_deref(), Some("<Super>k"));
+        assert_eq!(touches_gnome("ctrl+alt+espace").as_deref(), Some("<Control><Alt>space"));
+        assert_eq!(touches_gnome("Meta+F2").as_deref(), Some("<Super>F2"));
+        assert_eq!(touches_gnome("Meta+Truc"), None);
+        assert_eq!(format_liste(&["/a/".into(), "/b/".into()]), "['/a/', '/b/']");
         // L'extension embarquée est cohérente avec son identifiant.
         assert!(METADATA.contains(UUID) && EXTENSION.contains("org.lkatta.Gnome"));
     }

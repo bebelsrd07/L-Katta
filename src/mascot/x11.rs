@@ -899,7 +899,7 @@ fn bureau(app: &mut super::App) -> bool {
         .map(|s| s.nom.clone())
         .unwrap_or_default();
     let f = f.unwrap_or_default();
-    app.on_fenetre(crate::bureau::Fenetre { plein_ecran: f.plein_ecran, rect, classe: f.classe, titre: f.titre, ecran });
+    app.on_fenetre(crate::bureau::Fenetre { plein_ecran: f.plein_ecran, rect, classe: f.classe, titre: f.titre, ecran, ..Default::default() });
     true
 }
 

@@ -63,6 +63,8 @@ pub fn parse(line: &str) -> Option<Msg> {
         "teleporter" | "teleport" => Msg::Teleport,
         "grimper" | "climb" => Msg::Climb,
         "discuter" | "panneau" | "chat" | "panel" => Msg::Chat,
+        // Raccourci global d'un bureau sans KGlobalAccel (GNOME) : bulle ouverte, clavier prêt.
+        "raccourci" | "shortcut" => Msg::Raccourci,
         "ecran" | "screen" => Msg::Screen,
         "recharger" | "reload" => Msg::Reload,
         // bulle <genre> <titre> | <texte>   (genres : bonjour, astuce, rappel, alerte, nouvelle, reponse, info)

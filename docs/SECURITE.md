@@ -69,6 +69,10 @@ index, agenda, web), puis `cargo audit` (base RustSec, 228 dépendances de `Carg
 - Son objet D-Bus (`/org/lkatta/Gnome` chez org.gnome.Shell) liste les fenêtres et les
   active, réduit, agrandit ou ferme : comme kdotool sous KDE, tout programme de la session de
   l'utilisateur peut s'en servir. Pas d'accès depuis une autre session ni un autre utilisateur.
+- Raccourci global sous GNOME : un raccourci personnalisé (`custom-keybindings` de
+  org.gnome.settings-daemon.plugins.media-keys, chemin `.../custom-keybindings/lkatta/`) qui
+  lance `lkatta raccourci`. Une combinaison déjà prise par un autre raccourci personnalisé n'est
+  jamais remplacée ; `lkatta desinstaller` le retire.
 
 ## Non corrigé, à décider
 
