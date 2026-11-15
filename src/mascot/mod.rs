@@ -1863,6 +1863,29 @@ impl App {
         d.data().drag_offer().filter(|o| &o.surface == wl.layer.wl_surface())
     }
 
+    /// Des fichiers survolent le maki (Wayland ou X11) : la bulle devient une zone de dépôt.
+    fn depot_entree(&mut self) {
+        if self.depot_survol {
+            return;
+        }
+        self.depot_survol = true;
+        self.chat.depot_survol = true;
+        self.maki.set_expr(behavior::Expr::Surprised, 1.0);
+        if !self.chat.open {
+            self.maki.say(t!("Lâche-le sur moi : je le joins à ta question."), 4.0);
+        }
+        self.render();
+    }
+
+    /// Le survol s'arrête (glissé ailleurs, annulé ou lâché).
+    fn depot_sortie(&mut self) {
+        if self.depot_survol {
+            self.depot_survol = false;
+            self.chat.depot_survol = false;
+            self.render();
+        }
+    }
+
     /// Fichiers lâchés : joints à la prochaine question, bulle ouverte, saisie prête.
     fn fichiers_deposes(&mut self, donnees: &[u8]) {
         let liste = crate::fichiers::liste_uri(&String::from_utf8_lossy(donnees));
@@ -1886,22 +1909,12 @@ impl DataDeviceHandler for App {
         o.accept_mime_type(o.serial, fichiers.then(|| URI_LIST.to_string()));
         o.set_actions(if fichiers { DndAction::Copy } else { DndAction::None }, DndAction::Copy);
         if fichiers {
-            self.depot_survol = true;
-            self.chat.depot_survol = true;
-            self.maki.set_expr(behavior::Expr::Surprised, 1.0);
-            if !self.chat.open {
-                self.maki.say(t!("Lâche-le sur moi : je le joins à ta question."), 4.0);
-            }
-            self.render();
+            self.depot_entree();
         }
     }
 
     fn leave(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {
-        if self.depot_survol {
-            self.depot_survol = false;
-            self.chat.depot_survol = false;
-            self.render();
-        }
+        self.depot_sortie();
     }
 
     fn motion(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice, _x: f64, _y: f64) {}

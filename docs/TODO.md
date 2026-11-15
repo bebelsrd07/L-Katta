@@ -179,8 +179,11 @@ Une application généraliste qui s'adapte à chaque utilisateur. Ordre recomman
      panneaux (_NET_WORKAREA), curseurs du thème, presse-papiers par xclip ou xsel. Vérifié :
      disposition fr (^ puis e → ê, AltGr+e → €) en test, fenêtre active et plein écran dans un
      KWin virtuel avec Xwayland. Reste : essai sur un vrai bureau X11 (clics et frappe :
-     Xwayland refuse les événements simulés), glisser-déposer (XDND), historique du
-     presse-papiers sous X11, écran branché ou débranché en cours de route (RandR) ;
+     Xwayland refuse les événements simulés), historique du presse-papiers sous X11, écran
+     branché ou débranché en cours de route (RandR) ;
+   - f. ✔ glisser-déposer X11 (XDND 5, 0.2.9) : fichiers lâchés sur le maki ou la bulle, comme
+     sous Wayland ; vérifié avec `cargo run --example xdnd_source -- fichiers…` dans un KWin
+     virtuel. Le maki X11 s'arrête quand son serveur X disparaît (il tournait à vide) ;
    - d. ✔ choix automatique : Wayland avec layer-shell, sinon X11 (`DISPLAY`) — GNOME compris,
      par Xwayland ; `LKATTA_AFFICHAGE=x11` force X11 pour les essais.
 4. **GNOME (Wayland)** : extension GNOME Shell qui accueille le maki (GNOME refuse layer-shell).

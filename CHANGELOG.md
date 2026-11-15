@@ -2,6 +2,14 @@
 
 Règle : chaque chiffre va de 0 à 9 (0.0.9 → 0.1.0, 0.9.9 → 1.0.0).
 
+## 0.2.9 — en cours
+
+- **Glisser-déposer sous X11** : un fichier glissé depuis le gestionnaire de fichiers (Thunar,
+  Nemo, Caja, Dolphin…) et lâché sur le maki ou sur la bulle est joint à la question, comme
+  sous Wayland.
+- Correction : sous X11, le maki s'arrête quand la session se ferme au lieu d'occuper le
+  processeur.
+
 ## 0.2.8 — 2026-11-15
 
 - **Bureaux X11 complets** : les accents se tapent comme ailleurs (touches mortes ^ ¨ `,

@@ -173,6 +173,19 @@ struct Atomes {
     fermer: u32,
     change_etat: u32,
     cadre: u32,
+    // Glisser-déposer (protocole XDND, version 5).
+    xdnd_aware: u32,
+    xdnd_enter: u32,
+    xdnd_position: u32,
+    xdnd_status: u32,
+    xdnd_leave: u32,
+    xdnd_drop: u32,
+    xdnd_finished: u32,
+    xdnd_selection: u32,
+    xdnd_types: u32,
+    xdnd_copie: u32,
+    uri_list: u32,
+    depot: u32,
 }
 
 impl Atomes {
@@ -191,6 +204,18 @@ impl Atomes {
             "_NET_CLOSE_WINDOW",
             "WM_CHANGE_STATE",
             "_NET_FRAME_EXTENTS",
+            "XdndAware",
+            "XdndEnter",
+            "XdndPosition",
+            "XdndStatus",
+            "XdndLeave",
+            "XdndDrop",
+            "XdndFinished",
+            "XdndSelection",
+            "XdndTypeList",
+            "XdndActionCopy",
+            "text/uri-list",
+            "LKATTA_DEPOT",
         ];
         // Toutes les demandes d'abord, puis les réponses : un seul aller-retour.
         let cookies: Vec<_> = noms.iter().map(|n| c.intern_atom(false, n.as_bytes())).collect::<Result<_, _>>().map_err(|e| e.to_string())?;
@@ -209,6 +234,18 @@ impl Atomes {
             fermer: v[10],
             change_etat: v[11],
             cadre: v[12],
+            xdnd_aware: v[13],
+            xdnd_enter: v[14],
+            xdnd_position: v[15],
+            xdnd_status: v[16],
+            xdnd_leave: v[17],
+            xdnd_drop: v[18],
+            xdnd_finished: v[19],
+            xdnd_selection: v[20],
+            xdnd_types: v[21],
+            xdnd_copie: v[22],
+            uri_list: v[23],
+            depot: v[24],
         })
     }
 }
@@ -302,6 +339,8 @@ pub struct X11Aff {
     lire_fenetres: bool,
     lire_active: bool,
     lire_zone: bool,
+    /// Glisser en cours au-dessus du maki : (fenêtre source, version XDND, fichiers offerts).
+    glisse: Option<(xproto::Window, u32, bool)>,
 }
 
 /// Une fenêtre vue par le gestionnaire de fenêtres (EWMH).
@@ -459,6 +498,18 @@ impl X11Aff {
         Some((r[0] as i32 as f32, r[1] as i32 as f32, r[2] as f32, r[3] as f32))
     }
 
+    /// Message XDND à la fenêtre source d'un glisser.
+    fn xdnd_envoyer(&self, source: xproto::Window, type_: u32, d: [u32; 5]) {
+        let ev = xproto::ClientMessageEvent::new(32, source, type_, d);
+        let _ = self.c.send_event(false, source, xproto::EventMask::NO_EVENT, ev);
+        let _ = self.c.flush();
+    }
+
+    /// Types offerts par la source : dans le message, ou dans sa propriété XdndTypeList.
+    fn xdnd_types(&self, source: xproto::Window, d: &[u32; 5]) -> Vec<u32> {
+        if d[1] & 1 != 0 { self.propriete32(source, self.at.xdnd_types, 256) } else { d[2..5].iter().copied().filter(|t| *t != 0).collect() }
+    }
+
     /// Action demandée par un outil, envoyée au gestionnaire de fenêtres (EWMH).
     pub(super) fn action(&self, id: xproto::Window, a: crate::toplevels::Action) {
         use crate::toplevels::Action;
@@ -540,6 +591,9 @@ pub fn run(cfg: crate::config::Config, rx: smithay_client_toolkit::reexports::ca
     // Rien de cliquable tant que rien n'est dessiné.
     c.shape_rectangles(shape::SO::SET, shape::SK::INPUT, xproto::ClipOrdering::UNSORTED, w, 0, 0, &[]).map_err(|e| e.to_string())?;
     c.map_window(w).map_err(|e| e.to_string())?;
+    let at = Atomes::new(&c)?;
+    // Le maki accepte les fichiers glissés (XDND version 5).
+    c.change_property32(xproto::PropMode::REPLACE, w, at.xdnd_aware, xproto::AtomEnum::ATOM, &[5]).map_err(|e| e.to_string())?;
     // Racine : fenêtre active, liste des fenêtres, zone de travail, bureau courant.
     c.change_window_attributes(ecran.root, &xproto::ChangeWindowAttributesAux::new().event_mask(xproto::EventMask::PROPERTY_CHANGE)).map_err(|e| e.to_string())?;
     let setup = c.setup();
@@ -551,7 +605,6 @@ pub fn run(cfg: crate::config::Config, rx: smithay_client_toolkit::reexports::ca
         .map(|r| (premier, r.keysyms_per_keycode, r.keysyms))
         .unwrap_or((premier, 1, vec![]));
     let clavier = Clavier::new(&c, ecran.root);
-    let at = Atomes::new(&c)?;
     let curseurs = x11rb::resource_manager::new_from_default(&c).ok().and_then(|db| x11rb::cursor::Handle::new(&c, n, &db).ok()?.reply().ok());
     c.flush().map_err(|e| e.to_string())?;
     let liste = ecrans(&c, ecran.root, ecran.width_in_pixels, ecran.height_in_pixels);
@@ -575,6 +628,7 @@ pub fn run(cfg: crate::config::Config, rx: smithay_client_toolkit::reexports::ca
         lire_fenetres: true,
         lire_active: true,
         lire_zone: false,
+        glisse: None,
     };
     let zone = aff.zone_utile();
 
@@ -628,8 +682,17 @@ fn evenements(app: &mut super::App) {
     use smithay_client_toolkit::seat::pointer::{AxisScroll, PointerEventKind as K};
     let mut lus = vec![];
     if let Some(x) = app.x11.as_ref() {
-        while let Ok(Some(ev)) = x.c.poll_for_event() {
-            lus.push(ev);
+        loop {
+            match x.c.poll_for_event() {
+                Ok(Some(ev)) => lus.push(ev),
+                Ok(None) => break,
+                // Serveur X parti (session fermée) : le maki s'arrête au lieu de tourner à vide.
+                Err(e) => {
+                    eprintln!("lkatta : serveur X perdu ({e}), arrêt");
+                    app.exit = true;
+                    return;
+                }
+            }
         }
     }
     let mut redessiner = false;
@@ -705,6 +768,26 @@ fn evenements(app: &mut super::App) {
                     }
                 }
             }
+            Event::ClientMessage(e) => xdnd(app, &e),
+            Event::SelectionNotify(e) => {
+                let Some(x) = app.x11.as_mut() else { continue };
+                if e.requestor != x.win || e.selection != x.at.xdnd_selection {
+                    continue;
+                }
+                let source = x.glisse.take().map(|g| g.0);
+                let donnees = if e.property == 0 {
+                    vec![]
+                } else {
+                    let r = x.c.get_property(true, x.win, e.property, xproto::AtomEnum::ANY, 0, 1 << 18).ok().and_then(|k| k.reply().ok());
+                    r.map(|r| r.value).unwrap_or_default()
+                };
+                if let Some(s) = source {
+                    let ok = u32::from(!donnees.is_empty());
+                    x.xdnd_envoyer(s, x.at.xdnd_finished, [x.win, ok, if ok == 1 { x.at.xdnd_copie } else { 0 }, 0, 0]);
+                }
+                app.depot_sortie();
+                app.fichiers_deposes(&donnees);
+            }
             Event::ConfigureNotify(e) => {
                 if let Some(x) = app.x11.as_mut() {
                     if e.window == x.suivie {
@@ -718,6 +801,46 @@ fn evenements(app: &mut super::App) {
     redessiner |= bureau(app);
     if redessiner {
         app.render();
+    }
+}
+
+/// Glisser-déposer XDND : la source annonce le glisser, le promène, puis le lâche ; on demande
+/// alors la liste des fichiers (`text/uri-list`) par la sélection XdndSelection.
+fn xdnd(app: &mut super::App, e: &xproto::ClientMessageEvent) {
+    let Some(x) = app.x11.as_mut() else { return };
+    if e.window != x.win || e.format != 32 {
+        return;
+    }
+    let d = e.data.as_data32();
+    let source = d[0];
+    let t = e.type_;
+    if t == x.at.xdnd_enter {
+        let version = d[1] >> 24;
+        let fichiers = x.xdnd_types(source, &d).contains(&x.at.uri_list);
+        x.glisse = Some((source, version, fichiers));
+        if fichiers {
+            app.depot_entree();
+        }
+    } else if t == x.at.xdnd_position {
+        let fichiers = x.glisse.is_some_and(|g| g.0 == source && g.2);
+        // Accepté (bit 0), et des positions encore (bit 1) : la réponse ne dépend pas de l'endroit.
+        let action = if fichiers { x.at.xdnd_copie } else { 0 };
+        x.xdnd_envoyer(source, x.at.xdnd_status, [x.win, if fichiers { 3 } else { 2 }, 0, 0, action]);
+    } else if t == x.at.xdnd_leave {
+        x.glisse = None;
+        app.depot_sortie();
+    } else if t == x.at.xdnd_drop {
+        let fichiers = x.glisse.is_some_and(|g| g.0 == source && g.2);
+        if !fichiers {
+            x.glisse = None;
+            x.xdnd_envoyer(source, x.at.xdnd_finished, [x.win, 0, 0, 0, 0]);
+            app.depot_sortie();
+            return;
+        }
+        // Heure du lâcher (version ≥ 1) ; la réponse arrive en SelectionNotify.
+        let quand = if x.glisse.is_some_and(|g| g.1 >= 1) { d[2] } else { x11rb::CURRENT_TIME };
+        let _ = x.c.convert_selection(x.win, x.at.xdnd_selection, x.at.uri_list, x.at.depot, quand);
+        let _ = x.c.flush();
     }
 }
 

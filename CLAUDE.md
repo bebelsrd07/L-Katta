@@ -65,3 +65,8 @@
   l'instance d'essai parle au vrai KWin et au vrai bus de session de l'utilisateur. X11 sans
   clics simulés : fenêtres de test par xterm (`-fullscreen` pour le plein écran), LKATTA_DEBUG=1
   affiche « fenêtre : … ». Clavier X11 : `Clavier::depuis_noms` (libxkbcommon) testable sans X.
+- Glisser-déposer X11 : `examples/xdnd_source.rs` joue le gestionnaire de fichiers. Après un
+  essai sous `dbus-run-session`, les portails activés (xdg-desktop-portal, xdg-document-portal
+  et leur montage FUSE dans XDG_RUNTIME_DIR) survivent : les arrêter par PID après avoir vérifié
+  dans /proc/PID/environ qu'ils parlent au bus d'essai, puis vérifier qu'aucun
+  target/debug/lkatta ne reste.
