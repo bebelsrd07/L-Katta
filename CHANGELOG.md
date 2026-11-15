@@ -2,6 +2,12 @@
 
 Règle : chaque chiffre va de 0 à 9 (0.0.9 → 0.1.0, 0.9.9 → 1.0.0).
 
+## À venir
+
+- **Dépôt Flatpak** : `flatpak remote-add --user lkatta https://raantss18.github.io/L-Katta/flatpak/lkatta.flatpakrepo`
+  puis `flatpak install --user lkatta io.github.raantss18.LKatta` ; les versions suivantes arrivent
+  avec `flatpak update`. Le dépôt est signé (clé GPG du dépôt) et servi par le site.
+
 ## 0.3.2 — 2026-11-15
 
 - **Côté Code : un seul accord par dossier.** Au premier fichier écrit ou à la première

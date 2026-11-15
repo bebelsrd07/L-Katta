@@ -70,8 +70,16 @@ Ou l'archive `lkatta-*-x86_64-linux.tar.gz`, ou les sources :
 `paru -S lkatta-bin`.
 Les fichiers sont dans `packaging/aur/` ; la mise à jour passe alors par pacman.
 
-**Flatpak** : le fichier `LKatta-*-x86_64.flatpak` d'une release (à partir de 0.3.1), puis
-`flatpak install --user LKatta-*-x86_64.flatpak` et `flatpak run io.github.raantss18.LKatta`.
+**Flatpak**, par le dépôt de L Katta (les mises à jour arrivent avec `flatpak update`) :
+
+```bash
+flatpak remote-add --user --if-not-exists lkatta https://raantss18.github.io/L-Katta/flatpak/lkatta.flatpakrepo
+flatpak install --user lkatta io.github.raantss18.LKatta
+flatpak run io.github.raantss18.LKatta
+```
+
+Ou sans dépôt : le fichier `LKatta-*-x86_64.flatpak` d'une release (à partir de 0.3.1), puis
+`flatpak install --user LKatta-*-x86_64.flatpak`. L Katta n'est pas sur Flathub.
 Manifeste : `packaging/flatpak/`. Attention : ce Flatpak n'isole pas L Katta, qui lance les
 programmes de la machine (terminal, presse-papiers…) et garde les mêmes réglages que l'AppImage.
 

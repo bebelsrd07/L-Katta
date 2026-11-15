@@ -57,6 +57,22 @@ jobs:
       - name: Construire le site
         run: python3 tool/build_site.py --releases releases.json --out _site
 
+      # Dépôt Flatpak (flatpak remote-add … /flatpak/lkatta.flatpakrepo) : l'archive signée jointe à la
+      # dernière version qui en a une (tool/depot-flatpak.sh). La clé privée ne vient jamais ici.
+      - name: Dépôt Flatpak
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$(jq -r '[.[] | select((.draft or .prerelease) | not) | select(any(.assets[]; .name == "flatpak-depot.tar.gz"))][0].tag_name // empty' releases.json)"
+          if [ -n "$tag" ]; then
+            gh release download "$tag" --repo "${{ github.repository }}" --pattern flatpak-depot.tar.gz --dir "$RUNNER_TEMP/depot"
+            mkdir -p _site/flatpak
+            tar xzf "$RUNNER_TEMP/depot/flatpak-depot.tar.gz" -C _site/flatpak
+            ls _site/flatpak
+          else
+            echo "aucune version n'a encore de dépôt Flatpak"
+          fi
+
       # Les lémuriens de la page : planches d'animation dessinées par l'application, comme sur le bureau.
       - name: Dépendances de compilation
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev pkg-config

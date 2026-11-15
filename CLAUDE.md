@@ -80,6 +80,10 @@
   `flatpak install --user` du paquet puis `flatpak run --env=HOST_XDG_CONFIG_HOME=…` (dossiers
   d'essai sous ~ : /tmp n'est pas vu) ; désinstaller ensuite. `flatpak build` ne suffit pas
   (ni WAYLAND_DISPLAY ni $XDG_RUNTIME_DIR/app partagé).
+- Dépôt Flatpak : `tool/depot-flatpak.sh` signe repo-flatpak (clé GPG du dépôt, publique dans
+  packaging/flatpak/lkatta-depot.gpg, privée dans le trousseau d'Antsa) et écrit
+  dist/flatpak-depot.tar.gz, joint à la version ; site.yml le dépose sous /flatpak/. Flathub :
+  exclu (ils refusent les manifestes et demandes faits avec une IA, et les apps qui dépendent de l'hôte).
 - Autonomie du côté Code : src/autonomie.rs (un accord par dossier de projet, en mémoire ; fichiers
   libres dans le dossier ; commandes libres dans le bac bubblewrap sans réseau ; `gardee()` =
   toujours demandé). Règle `autonomie` dans regles.toml. Ne jamais élargir l'accord au dossier

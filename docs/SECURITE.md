@@ -83,6 +83,10 @@ index, agenda, web), puis `cargo audit` (base RustSec, 228 dépendances de `Carg
   Les règles de l'administrateur sont lues dans /run/host/etc/lkatta (accès host-etc en lecture).
 - **Installé par pacman ou Flatpak** : la mise à jour intégrée ne remplace rien (`hote::gestionnaire`),
   le gestionnaire de paquets garde la main sur /usr/bin et /app.
+- **Dépôt Flatpak** (site, `/flatpak/`) : versions et sommaire signés par la clé GPG du dépôt
+  (`tool/depot-flatpak.sh`) ; la clé publique est dans le fichier `.flatpakrepo`, la clé privée
+  ne quitte pas le trousseau de la personne qui publie (jamais dans Git ni dans la CI).
+  L'archive du dépôt figure aussi dans le SHA256SUMS signé de la version.
 - **AUR** : `lkatta-bin` vérifie l'archive par son SHA-256, pris dans le SHA256SUMS signé.
 
 ## Autonomie du côté Code (src/autonomie.rs)

@@ -40,11 +40,20 @@ cp assets/fonts/OFL-*.txt "$d/fonts/"
 # Flatpak (paquet .flatpak joint à la version) : SDK freedesktop + rust-stable et
 # org.flatpak.Builder installés (flatpak --user). Sans eux, la version part sans Flatpak.
 flatpak_out=""
+depot_out=""
 if flatpak info --user org.flatpak.Builder >/dev/null 2>&1; then
   flatpak run org.flatpak.Builder --force-clean --state-dir=.flatpak-builder --repo=repo-flatpak build-flatpak packaging/flatpak/io.github.raantss18.LKatta.yml >/dev/null
   flatpak_out="LKatta-$v-x86_64.flatpak"
   flatpak build-bundle repo-flatpak "dist/$flatpak_out" io.github.raantss18.LKatta
   (cd dist && sha256sum "$flatpak_out" >> SHA256SUMS)
+  # Dépôt Flatpak servi par le site (flatpak update) : signé par la clé GPG du dépôt, si elle existe.
+  code=0
+  tool/depot-flatpak.sh repo-flatpak dist/flatpak-depot.tar.gz >/dev/null || code=$?
+  case "$code" in
+    0) depot_out="flatpak-depot.tar.gz"; (cd dist && sha256sum "$depot_out" >> SHA256SUMS) ;;
+    3) ;;
+    *) echo "le dépôt Flatpak n'a pas pu être signé" >&2; exit 1 ;;
+  esac
 else
   echo "(org.flatpak.Builder absent : pas de paquet Flatpak pour $v)" >&2
 fi
@@ -56,5 +65,5 @@ target/release/lkatta verifier-signature dist/SHA256SUMS dist/SHA256SUMS.sig
 
 git tag "v$v"
 git push origin main "v$v"
-gh release create "v$v" "$appimage" "dist/lkatta-$v-x86_64-linux.tar.gz" ${flatpak_out:+"dist/$flatpak_out"} dist/SHA256SUMS dist/SHA256SUMS.sig --title "L Katta $v" --notes-file "$notes"
+gh release create "v$v" "$appimage" "dist/lkatta-$v-x86_64-linux.tar.gz" ${flatpak_out:+"dist/$flatpak_out"} ${depot_out:+"dist/$depot_out"} dist/SHA256SUMS dist/SHA256SUMS.sig --title "L Katta $v" --notes-file "$notes"
 echo "Publié : v$v (signée)"
