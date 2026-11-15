@@ -66,7 +66,17 @@ lkatta &
 Ou l'archive `lkatta-*-x86_64-linux.tar.gz`, ou les sources :
 `cargo build --release && ./target/release/lkatta installer` (AppImage : `scripts/appimage.sh`).
 
-Prérequis : Wayland avec *layer-shell* (KDE Plasma, Sway, Hyprland…), `wl-clipboard` ;
+**Arch Linux** (AUR, paquets `lkatta-bin` ou `lkatta` à compiler) : `paru -S lkatta-bin`.
+Les fichiers sont dans `packaging/aur/` ; la mise à jour passe alors par pacman.
+
+**Flatpak** : `packaging/flatpak/` (construction décrite en tête du manifeste). Attention : ce
+Flatpak n'isole pas L Katta, qui lance les programmes de la machine (terminal, presse-papiers…).
+
+Le binaire démarre avec glibc 2.35 ou plus (Ubuntu 22.04, Debian 12, Fedora, Arch…).
+
+Prérequis : un bureau Wayland avec *layer-shell* (KDE Plasma, Sway, Hyprland, niri, COSMIC…)
+et `wl-clipboard`, ou un bureau X11 (XFCE, Cinnamon, MATE, i3…) et `xclip` ; sous GNOME, le
+maki passe par Xwayland et `/gnome` installe la petite extension qui lui montre les fenêtres ;
 pour les mails `curl` et `secret-tool` (libsecret). L'IA marche dès l'installation avec les
 modèles gratuits sans clé ; une clé (gratuite, ou payante : Anthropic, OpenAI, DeepSeek, xAI)
 en ajoute d'autres, et un modèle Ollama conseillé selon la machine prend le relais sans Internet.

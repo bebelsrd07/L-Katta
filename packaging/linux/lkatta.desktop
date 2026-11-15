@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=L Katta
+Comment=Un petit lémurien assistant sur ton bureau
+Comment[en]=A little lemur assistant on your desktop
+Exec=lkatta
+Icon=lkatta
+Terminal=false
+Categories=Utility;
+Keywords=assistant;ia;ai;maki;lemur;
+StartupWMClass=lkatta

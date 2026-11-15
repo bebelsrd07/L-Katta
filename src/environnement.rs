@@ -50,7 +50,7 @@ pub fn fichier() -> std::path::PathBuf {
 }
 
 fn sortie(prog: &str, args: &[&str]) -> String {
-    std::process::Command::new(prog)
+    crate::hote::commande(prog)
         .args(args)
         .stderr(std::process::Stdio::null())
         .output()

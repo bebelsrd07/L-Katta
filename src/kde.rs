@@ -1,7 +1,7 @@
 //! Bureaux virtuels et écrans de KDE Plasma (D-Bus de KWin via `gdbus`, `kscreen-doctor`).
 
 use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use crate::config::which;
 
@@ -13,7 +13,7 @@ pub struct Bureau {
 }
 
 fn gdbus(args: &[&str]) -> Option<String> {
-    let o = Command::new("gdbus").args(["call", "--session", "--dest", "org.kde.KWin", "--object-path", "/VirtualDesktopManager"]).args(args).output().ok()?;
+    let o = crate::hote::commande("gdbus").args(["call", "--session", "--dest", "org.kde.KWin", "--object-path", "/VirtualDesktopManager"]).args(args).output().ok()?;
     o.status.success().then(|| String::from_utf8_lossy(&o.stdout).into_owned())
 }
 
@@ -79,7 +79,7 @@ pub fn screens_text() -> String {
     if !which("kscreen-doctor") {
         return String::new();
     }
-    let out = Command::new("kscreen-doctor").arg("-o").output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    let out = crate::hote::commande("kscreen-doctor").arg("-o").output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
     let mut clean = String::new();
     let mut in_esc = false;
     for c in out.chars() {
@@ -112,7 +112,7 @@ pub fn screens_text() -> String {
 /// Écran actif selon KWin (celui de la souris ou de la fenêtre active).
 pub fn active_output() -> Option<String> {
     let bin = if which("qdbus6") { "qdbus6" } else { "qdbus" };
-    let o = Command::new(bin).args(["org.kde.KWin", "/KWin", "org.kde.KWin.activeOutputName"]).stderr(Stdio::null()).output().ok()?;
+    let o = crate::hote::commande(bin).args(["org.kde.KWin", "/KWin", "org.kde.KWin.activeOutputName"]).stderr(Stdio::null()).output().ok()?;
     let n = String::from_utf8_lossy(&o.stdout).trim().to_string();
     (o.status.success() && !n.is_empty()).then_some(n)
 }
@@ -122,7 +122,7 @@ pub fn watch(mut on_change: impl FnMut(String)) {
     if !which("gdbus") {
         return;
     }
-    let Ok(mut child) = crate::paths::mourir_avec_parent(&mut Command::new("gdbus"))
+    let Ok(mut child) = crate::paths::mourir_avec_parent(&mut crate::hote::commande("gdbus"))
         .args(["monitor", "--session", "--dest", "org.kde.KWin", "--object-path", "/VirtualDesktopManager"])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

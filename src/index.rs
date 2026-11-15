@@ -237,7 +237,7 @@ fn read_debut(p: &Path, n: usize) -> std::io::Result<Vec<u8>> {
 
 /// Texte des 6 premières pages d'un PDF (pdftotext, s'il est installé).
 fn pdf(p: &Path) -> String {
-    let o = std::process::Command::new("pdftotext")
+    let o = crate::hote::commande("pdftotext")
         .args(["-l", "6", "-q", "-enc", "UTF-8"])
         .arg(p)
         .arg("-")

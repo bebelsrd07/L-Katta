@@ -4,7 +4,7 @@
 //! machine tant qu'on ne demande pas de résumé.
 
 use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use serde::{Deserialize, Serialize};
 
@@ -49,7 +49,7 @@ pub fn ecouter() {
     if !crate::config::which("dbus-monitor") {
         return;
     }
-    let Ok(mut child) = paths::mourir_avec_parent(&mut Command::new("dbus-monitor"))
+    let Ok(mut child) = paths::mourir_avec_parent(&mut crate::hote::commande("dbus-monitor"))
         .args(["--session", "type='method_call',interface='org.freedesktop.Notifications',member='Notify'"])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -169,7 +169,7 @@ mod tests {
     fn ecoute_reelle() {
         std::thread::spawn(ecouter);
         std::thread::sleep(std::time::Duration::from_millis(800));
-        let _ = Command::new("notify-send").args(["-a", "Essai L Katta", "Titre d'essai", "Corps d'essai"]).status();
+        let _ = crate::hote::commande("notify-send").args(["-a", "Essai L Katta", "Titre d'essai", "Corps d'essai"]).status();
         std::thread::sleep(std::time::Duration::from_millis(1200));
         assert!(load().iter().any(|n| n.app == "Essai L Katta" && n.titre == "Titre d'essai" && n.texte == "Corps d'essai"), "{:?}", load());
     }

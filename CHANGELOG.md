@@ -2,6 +2,17 @@
 
 Règle : chaque chiffre va de 0 à 9 (0.0.9 → 0.1.0, 0.9.9 → 1.0.0).
 
+## 0.3.1 — en cours
+
+- **Correction importante** : le binaire et l'AppImage exigeaient glibc 2.43, donc ne
+  démarraient que sur les distributions les plus récentes (Arch). Ils démarrent maintenant avec
+  glibc 2.35 ou plus (Ubuntu 22.04, Debian 12, Fedora…) ; chaque publication le vérifie.
+- **Arch Linux** : paquets AUR `lkatta-bin` (binaire de la version) et `lkatta` (compilé).
+- **Flatpak** : manifeste `io.github.raantss18.LKatta` ; les programmes de la machine passent par
+  `flatpak-spawn --host`, mêmes dossiers de réglages que l'AppImage.
+- Installé par un gestionnaire de paquets (pacman, Flatpak) : L Katta ne se remplace plus lui-même,
+  il signale la nouvelle version.
+
 ## 0.3.0 — 2026-11-15
 
 - **GNOME** : une petite extension, installée quand tu tapes `/gnome`, permet au maki de voir

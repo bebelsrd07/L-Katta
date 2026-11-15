@@ -3,7 +3,7 @@
 //! Lecture seule : exécutés directement. Tout ce qui modifie : confirmation demandée.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -505,7 +505,7 @@ pub fn execute(name: &str, a: &Value, cfg: &Config, host: &mut dyn Host) -> Stri
 // --- implémentations -------------------------------------------------------
 
 fn run_capture(cmd: &str, timeout: Duration) -> Result<(i32, String), String> {
-    let mut child = Command::new("bash")
+    let mut child = crate::hote::commande("bash")
         .args(["-c", cmd])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -874,7 +874,7 @@ fn open(cible: &str) -> Result<String, String> {
     if !target.starts_with("http") && !Path::new(&target).exists() {
         return Err(format!("{target} n'existe pas"));
     }
-    Command::new("xdg-open")
+    crate::hote::commande("xdg-open")
         .arg(&target)
         .stdout(Stdio::null())
         .stderr(Stdio::null())

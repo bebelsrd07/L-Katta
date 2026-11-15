@@ -5,7 +5,7 @@
 //!
 //! Installée seulement quand l'utilisateur le demande (`/gnome`, `lkatta gnome`).
 
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 pub const UUID: &str = "lkatta@raantss18.github.io";
 const METADATA: &str = include_str!("../assets/gnome/lkatta@raantss18.github.io/metadata.json");
@@ -21,7 +21,8 @@ pub fn bureau_gnome() -> bool {
 }
 
 fn dossier() -> std::path::PathBuf {
-    std::env::var_os("XDG_DATA_HOME")
+    // Dans le Flatpak, XDG_DATA_HOME est celui du bac à sable : GNOME Shell lit celui de la machine.
+    std::env::var_os(if crate::hote::flatpak() { "HOST_XDG_DATA_HOME" } else { "XDG_DATA_HOME" })
         .map(std::path::PathBuf::from)
         .filter(|p| p.is_absolute())
         .unwrap_or_else(|| crate::paths::home_dir().join(".local/share"))
@@ -86,7 +87,7 @@ fn absente() -> String {
 }
 
 fn lancer(prog: &str, args: &[&str]) -> bool {
-    crate::config::which(prog) && Command::new(prog).args(args).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success())
+    crate::config::which(prog) && crate::hote::commande(prog).args(args).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success())
 }
 
 /// `['a@b', 'c@d']` (gsettings) → liste.
@@ -97,7 +98,7 @@ pub fn liste_gsettings(t: &str) -> Vec<String> {
 
 /// Ajoute l'extension à la liste des extensions activées (sans `gnome-extensions`).
 fn activer_gsettings() -> bool {
-    let Ok(o) = Command::new("gsettings").args(["get", "org.gnome.shell", "enabled-extensions"]).output() else { return false };
+    let Ok(o) = crate::hote::commande("gsettings").args(["get", "org.gnome.shell", "enabled-extensions"]).output() else { return false };
     let mut l = liste_gsettings(&String::from_utf8_lossy(&o.stdout));
     if !l.iter().any(|u| u == UUID) {
         l.push(UUID.to_string());
@@ -158,7 +159,7 @@ fn gsettings_get(schema: &str, cle: &str) -> Option<String> {
     if !crate::config::which("gsettings") {
         return None;
     }
-    let o = Command::new("gsettings").args(["get", schema, cle]).stderr(Stdio::null()).output().ok()?;
+    let o = crate::hote::commande("gsettings").args(["get", schema, cle]).stderr(Stdio::null()).output().ok()?;
     o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
 }
 
@@ -216,7 +217,7 @@ pub fn raccourci(seq: &str) {
         eprintln!("lkatta : « {touches} » sert déjà à un autre raccourci GNOME ; le mien n'est pas posé");
         return;
     }
-    let commande = format!("env APPIMAGELAUNCHER_DISABLE=1 {} raccourci", crate::install::lanceur().display());
+    let commande = format!("{} raccourci", crate::hote::lanceur_bureau());
     if perso_get("binding", PERSO).as_deref() != Some(touches.as_str()) {
         perso_set("binding", &touches);
     }
@@ -252,7 +253,7 @@ fn format_liste(l: &[String]) -> String {
 /// Retire l'extension (désactivée et effacée).
 pub fn retirer() -> Result<String, String> {
     let _ = lancer("gnome-extensions", &["disable", UUID]);
-    if let Ok(o) = Command::new("gsettings").args(["get", "org.gnome.shell", "enabled-extensions"]).output() {
+    if let Ok(o) = crate::hote::commande("gsettings").args(["get", "org.gnome.shell", "enabled-extensions"]).output() {
         let l: Vec<String> = liste_gsettings(&String::from_utf8_lossy(&o.stdout)).into_iter().filter(|u| u != UUID).collect();
         let _ = lancer("gsettings", &["set", "org.gnome.shell", "enabled-extensions", &format_liste(&l)]);
     }

@@ -5,7 +5,7 @@
 //! l'utilisateur les tape lui-même. La lecture ne marque pas les messages comme lus.
 
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -62,7 +62,7 @@ impl Compte {
 }
 
 fn secret(c: &Compte) -> Result<String, String> {
-    let o = Command::new("secret-tool")
+    let o = crate::hote::commande("secret-tool")
         .args(["lookup", "service", "lkatta", "compte", &c.adresse])
         .output()
         .map_err(|_| t!("secret-tool absent (paquet libsecret)").to_string())?;
@@ -85,7 +85,7 @@ pub fn remove_password(adresse: &str) {
 
 /// Enregistre le mot de passe dans le trousseau (saisi par l'utilisateur dans le terminal).
 pub fn store_secret(adresse: &str) -> Result<(), String> {
-    let st = Command::new("secret-tool")
+    let st = crate::hote::commande("secret-tool")
         .args(["store", &format!("--label=L Katta : {adresse}"), "service", "lkatta", "compte", adresse])
         .status()
         .map_err(|_| t!("secret-tool absent (paquet libsecret)").to_string())?;
@@ -115,7 +115,7 @@ fn curl(c: &Compte, url: &str, args: &[&str], stdin: Option<&[u8]>) -> Result<St
     let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
     paths::write_private(&netrc, format!("machine {} login \"{}\" password \"{}\"\n", host_of(url), esc(c.login()), esc(&pass)).as_bytes())
         .map_err(|e| e.to_string())?;
-    let mut cmd = Command::new("curl");
+    let mut cmd = crate::hote::commande("curl");
     cmd.args(["-sS", "--max-time", "40", "--netrc-file"]).arg(&netrc).args(["--url", url]).args(args);
     if url.starts_with("smtp://") || url.starts_with("imap://") {
         cmd.arg("--ssl-reqd");
@@ -482,7 +482,7 @@ pub fn pieces_jointes(raw: &str) -> Vec<PieceJointe> {
 
 /// Dossier de téléchargement de l'utilisateur (nom localisé selon la langue du système).
 pub fn dossier_telechargements() -> std::path::PathBuf {
-    let xdg = Command::new("xdg-user-dir").arg("DOWNLOAD").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|s| !s.is_empty());
+    let xdg = crate::hote::commande("xdg-user-dir").arg("DOWNLOAD").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|s| !s.is_empty());
     let home = paths::home_dir();
     match xdg.map(std::path::PathBuf::from) {
         Some(p) if p != home => p,

@@ -3,7 +3,7 @@
 //!   titre, écran) au service D-Bus `org.lkatta.Maki` de L Katta ;
 //! - une veille légère regarde « Ne pas déranger » (Plasma) et l'usage du micro (visio).
 
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Duration;
 
 use crate::config::which;
@@ -75,7 +75,7 @@ signaler();
 
 fn qdbus(args: &[&str]) -> Option<String> {
     let bin = if which("qdbus6") { "qdbus6" } else { "qdbus" };
-    let o = Command::new(bin).args(args).stderr(Stdio::null()).output().ok()?;
+    let o = crate::hote::commande(bin).args(args).stderr(Stdio::null()).output().ok()?;
     o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
 }
 
@@ -169,7 +169,7 @@ pub fn qt_key(seq: &str) -> Option<i32> {
 }
 
 fn kga(method: &str, args: &[&str]) -> Option<String> {
-    let o = Command::new("gdbus")
+    let o = crate::hote::commande("gdbus")
         .args(["call", "--session", "--dest", "org.kde.kglobalaccel", "--object-path", "/kglobalaccel", "--method", &format!("org.kde.KGlobalAccel.{method}")])
         .args(args)
         .stderr(Stdio::null())
@@ -204,7 +204,7 @@ pub fn raccourci(seq: &str, tx: impl Fn(Msg) + Send + 'static) {
         // Par défaut, puis actif (2 = présent, 4 = sans relire l'ancien : la config fait foi).
         let _ = kga("setShortcut", &[ACTION, &keys, "1"]);
         let _ = kga("setShortcut", &[ACTION, &keys, "6"]);
-        let Ok(mut child) = paths::mourir_avec_parent(&mut Command::new("gdbus"))
+        let Ok(mut child) = paths::mourir_avec_parent(&mut crate::hote::commande("gdbus"))
             .args(["monitor", "--session", "--dest", "org.kde.kglobalaccel", "--object-path", "/component/lkatta"])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -253,7 +253,7 @@ pub fn ne_pas_deranger() -> bool {
     if crate::gnome::bureau_gnome() {
         return crate::gnome::ne_pas_deranger();
     }
-    Command::new("gdbus")
+    crate::hote::commande("gdbus")
         .args(["call", "--session", "--dest", "org.freedesktop.Notifications", "--object-path", "/org/freedesktop/Notifications", "--method", "org.freedesktop.DBus.Properties.Get", "org.freedesktop.Notifications", "Inhibited"])
         .stderr(Stdio::null())
         .output()
@@ -266,7 +266,7 @@ pub fn micro_utilise() -> bool {
     if !which("pactl") {
         return false;
     }
-    Command::new("pactl")
+    crate::hote::commande("pactl")
         .args(["list", "source-outputs", "short"])
         .stderr(Stdio::null())
         .output()

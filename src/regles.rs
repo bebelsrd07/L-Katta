@@ -94,7 +94,10 @@ conversation. Pour les changer, il faut modifier ce fichier.
 ";
 
 fn system_dir() -> PathBuf {
-    PathBuf::from(std::env::var("LKATTA_ETC").unwrap_or_else(|_| "/etc/lkatta".into()))
+    // Dans le Flatpak, /etc est celui du bac à sable : les règles de l'administrateur sont
+    // dans /run/host/etc (accès host-etc du manifeste).
+    let defaut = if crate::hote::flatpak() { "/run/host/etc/lkatta" } else { "/etc/lkatta" };
+    PathBuf::from(std::env::var("LKATTA_ETC").unwrap_or_else(|_| defaut.into()))
 }
 
 fn read_toml(p: &Path) -> Option<Regles> {

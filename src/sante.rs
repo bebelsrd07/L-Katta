@@ -1,7 +1,7 @@
 //! Santé de la machine et garde-fous des commandes.
 //! Porté de mi-saina (services/health_monitor.py, diagnostics.py, shell_stream.py).
 
-use std::process::Command;
+
 
 use crate::config::which;
 
@@ -17,7 +17,7 @@ pub struct Constat {
 }
 
 fn run(cmd: &str, args: &[&str]) -> Option<String> {
-    let o = Command::new(cmd).args(args).output().ok()?;
+    let o = crate::hote::commande(cmd).args(args).output().ok()?;
     o.status.success().then(|| String::from_utf8_lossy(&o.stdout).into_owned())
 }
 
@@ -84,7 +84,7 @@ fn check_updates() -> Vec<Constat> {
         (n, "sudo apt update && sudo apt upgrade")
     } else if which("dnf") {
         // dnf check-update renvoie 100 quand il y a des mises à jour : pas de `run`.
-        let n = Command::new("dnf").args(["-q", "check-update"]).output().ok()
+        let n = crate::hote::commande("dnf").args(["-q", "check-update"]).output().ok()
             .map(|o| String::from_utf8_lossy(&o.stdout).lines().filter(|l| l.chars().next().is_some_and(|c| c.is_alphanumeric())).count())
             .unwrap_or(0);
         (n, "sudo dnf upgrade")

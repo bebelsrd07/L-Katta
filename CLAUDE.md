@@ -70,6 +70,10 @@
   et leur montage FUSE dans XDG_RUNTIME_DIR) survivent : les arrêter par PID après avoir vérifié
   dans /proc/PID/environ qu'ils parlent au bus d'essai, puis vérifier qu'aucun
   target/debug/lkatta ne reste.
+- Programmes externes : TOUJOURS `crate::hote::commande(..)` (ou `commande_env`), jamais
+  `Command::new` (sauf le binaire lui-même) : dans le Flatpak ils passent par
+  `flatpak-spawn --host`. `config::which` regarde sur la machine. Paquets : packaging/aur
+  (`tool/aur.sh`), packaging/flatpak. Glibc : `tool/glibc-max.sh` (2.35 max, src/glibc.rs).
 - GNOME : extension pont dans assets/gnome/<uuid>/ (embarquée par include_str!, src/gnome.rs),
   ES modules GNOME 45+. Elle envoie la fenêtre active à org.lkatta.Maki (comme le script KWin)
   et offre /org/lkatta/Gnome chez org.gnome.Shell. Toute chaîne nouvelle passe par t!() ET

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.raantss18.LKatta</id>
+  <name>L Katta</name>
+  <summary>A little lemur assistant on your desktop</summary>
+  <summary xml:lang="fr">Un petit lémurien assistant sur ton bureau</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+  <developer id="io.github.raantss18">
+    <name>RANIRIAMANJAKA Antsa</name>
+  </developer>
+  <description>
+    <p>A small lemur lives on the edges of your screen. Click it to chat with an AI that knows
+      your computer: find files, read mail and calendar, set reminders, manage windows, explain
+      what is on screen. It stays quiet during full screen videos and video calls.</p>
+    <p xml:lang="fr">Un petit maki vit sur les bords de ton écran. Clique dessus pour discuter avec
+      une IA qui connaît ton ordinateur : retrouver des fichiers, lire mails et agenda, poser des
+      rappels, manipuler les fenêtres, expliquer ce qui est à l'écran. Il se tait pendant les
+      vidéos en plein écran et les visios.</p>
+    <p>This Flatpak runs the computer's own programs (terminal, clipboard, package manager) on
+      the host: it is not sandboxed.</p>
+  </description>
+  <launchable type="desktop-id">io.github.raantss18.LKatta.desktop</launchable>
+  <url type="homepage">https://raantss18.github.io/L-Katta/</url>
+  <url type="bugtracker">https://github.com/raantss18/L-Katta/issues</url>
+  <url type="vcs-browser">https://github.com/raantss18/L-Katta</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.3.0" date="2026-11-15"/>
+  </releases>
+</component>

@@ -2,13 +2,13 @@
 //! texte affiché par le terminal courant, y écrire. L'utilisateur voit tout ; les
 //! commandes administrateur y demandent son mot de passe à lui, jamais au maki.
 
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use crate::config::which;
 
 fn qdbus(args: &[&str]) -> Option<String> {
     let bin = if which("qdbus6") { "qdbus6" } else { "qdbus" };
-    let o = Command::new(bin).args(args).stderr(Stdio::null()).output().ok()?;
+    let o = crate::hote::commande(bin).args(args).stderr(Stdio::null()).output().ok()?;
     o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
 }
 
@@ -46,12 +46,12 @@ fn current() -> Option<(String, String)> {
 /// Lance un programme dans sa propre unité systemd (il survit à un redémarrage du maki).
 fn hors_du_maki(prog: &str, args: &[String]) -> Result<(), String> {
     let mut c = if which("systemd-run") {
-        let mut c = Command::new("systemd-run");
+        let mut c = crate::hote::commande("systemd-run");
         c.args(["--user", "--scope", "--quiet", "--collect", "--unit", &format!("lkatta-terminal-{}", std::process::id() as u64 * 1000 + fastrand::u64(..1000))]);
         c.arg("setsid");
         c
     } else {
-        Command::new("setsid")
+        crate::hote::commande("setsid")
     };
     c.arg(prog).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
@@ -117,12 +117,12 @@ pub fn run_visible(cmd: &str) -> Result<String, String> {
     // Le terminal vit dans sa propre unité systemd : relancer ou mettre à jour le maki ne doit
     // jamais couper une commande de l'utilisateur (une mise à jour du système, par exemple).
     let mut c = if which("systemd-run") {
-        let mut c = Command::new("systemd-run");
+        let mut c = crate::hote::commande("systemd-run");
         c.args(["--user", "--scope", "--quiet", "--collect", "--unit", &format!("lkatta-terminal-{}", std::process::id() as u64 * 1000 + fastrand::u64(..1000))]);
         c.arg("setsid");
         c
     } else {
-        Command::new("setsid")
+        crate::hote::commande("setsid")
     };
     c.args(["konsole", "-p", "tabtitle=L Katta", "-e", "bash", "-c", &script])
         .stdin(Stdio::null())

@@ -78,7 +78,7 @@ pub fn run() -> Result<(), String> {
             let mut proposed = String::new();
             loop {
                 if let Ok(Some(rel)) = crate::maj::check() {
-                    if auto {
+                    if auto && crate::hote::gestionnaire().is_none() {
                         if crate::maj::install(&rel).is_ok() {
                             let _ = tx.send(Msg::Say(t!("Je me suis mis à jour ({}). Je redémarre !", rel.version)));
                             std::thread::sleep(Duration::from_secs(4));

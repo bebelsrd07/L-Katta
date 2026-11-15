@@ -193,7 +193,7 @@ pub fn launch(query: &str) -> Result<String, String> {
     } else {
         a.exec.clone()
     };
-    std::process::Command::new("sh")
+    crate::hote::commande("sh")
         .args(["-c", &format!("setsid {cmd} >/dev/null 2>&1 &")])
         .status()
         .map_err(|e| e.to_string())?;

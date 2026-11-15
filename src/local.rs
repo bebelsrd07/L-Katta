@@ -42,7 +42,7 @@ pub fn machine() -> Machine {
 }
 
 fn nvidia() -> Option<(String, f32)> {
-    let o = std::process::Command::new("nvidia-smi").args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"]).stderr(std::process::Stdio::null()).output().ok()?;
+    let o = crate::hote::commande("nvidia-smi").args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"]).stderr(std::process::Stdio::null()).output().ok()?;
     let l = String::from_utf8_lossy(&o.stdout);
     let (nom, mo) = l.lines().next()?.rsplit_once(',')?;
     Some((nom.trim().to_string(), mo.trim().parse::<f32>().ok()? / 1024.0))
@@ -107,7 +107,7 @@ fn demarrer() -> Result<(), String> {
     if !ollama_installe() {
         return Err(t!("Ollama n'est pas installé.").into());
     }
-    std::process::Command::new("ollama")
+    crate::hote::commande("ollama")
         .arg("serve")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())

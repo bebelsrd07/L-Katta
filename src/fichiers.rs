@@ -102,7 +102,7 @@ fn repli(titre: &str) -> Option<Vec<PathBuf>> {
         if !crate::config::which(prog) {
             continue;
         }
-        let o = std::process::Command::new(prog).args(&args).stderr(std::process::Stdio::null()).output().ok()?;
+        let o = crate::hote::commande(prog).args(&args).stderr(std::process::Stdio::null()).output().ok()?;
         // Code 1 : annulé par l'utilisateur.
         return Some(if o.status.success() { String::from_utf8_lossy(&o.stdout).lines().map(str::trim).filter(|l| !l.is_empty()).map(PathBuf::from).collect() } else { vec![] });
     }
@@ -138,7 +138,7 @@ pub fn filtrer(v: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<String>) {
 fn lire(p: &Path, max: usize) -> Option<String> {
     let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     if ext == "pdf" {
-        let o = std::process::Command::new("pdftotext").args(["-l", "30", "-q", "-enc", "UTF-8"]).arg(p).arg("-").stderr(std::process::Stdio::null()).output().ok()?;
+        let o = crate::hote::commande("pdftotext").args(["-l", "30", "-q", "-enc", "UTF-8"]).arg(p).arg("-").stderr(std::process::Stdio::null()).output().ok()?;
         return o.status.success().then(|| String::from_utf8_lossy(&o.stdout).chars().take(max).collect());
     }
     use std::io::Read;

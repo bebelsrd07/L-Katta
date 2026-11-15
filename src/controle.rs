@@ -14,7 +14,7 @@
 //!    interdites (Ctrl+Alt+Suppr…), jamais de secret tapé.
 //! 5. 25 actions au plus par demande ; Échap dans la bulle arrête tout de suite.
 
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -83,7 +83,7 @@ fn kdotool(args: &[&str]) -> Result<String, String> {
     if !which("kdotool") {
         return Err(t!("kdotool n'est pas installé (paquet kdotool) : je ne peux pas manipuler les fenêtres.").into());
     }
-    let o = Command::new("kdotool").args(args).stderr(Stdio::null()).output().map_err(|e| e.to_string())?;
+    let o = crate::hote::commande("kdotool").args(args).stderr(Stdio::null()).output().map_err(|e| e.to_string())?;
     Ok(String::from_utf8_lossy(&o.stdout).trim().to_string())
 }
 
@@ -110,12 +110,12 @@ fn depuis_wl(f: crate::toplevels::Fenetre) -> Fenetre {
 }
 
 fn sortie_json(prog: &str, args: &[&str]) -> Result<serde_json::Value, String> {
-    let o = Command::new(prog).args(args).stderr(Stdio::null()).output().map_err(|e| e.to_string())?;
+    let o = crate::hote::commande(prog).args(args).stderr(Stdio::null()).output().map_err(|e| e.to_string())?;
     serde_json::from_slice(&o.stdout).map_err(|e| format!("{prog} : {e}"))
 }
 
 fn lancer(prog: &str, args: &[&str]) -> Result<(), String> {
-    let o = Command::new(prog).args(args).stdout(Stdio::null()).stderr(Stdio::null()).status().map_err(|e| e.to_string())?;
+    let o = crate::hote::commande(prog).args(args).stdout(Stdio::null()).stderr(Stdio::null()).status().map_err(|e| e.to_string())?;
     if o.success() { Ok(()) } else { Err(format!("{prog} a refusé")) }
 }
 
@@ -298,7 +298,7 @@ fn ydotool(args: &[String]) -> Result<(), String> {
     }
     let p = prise();
     if !p.exists() {
-        crate::paths::mourir_avec_parent(&mut Command::new("ydotoold"))
+        crate::paths::mourir_avec_parent(&mut crate::hote::commande("ydotoold"))
             .arg(format!("--socket-path={}", p.display()))
             .arg("--mouse-off")
             .stdin(Stdio::null())
@@ -313,7 +313,7 @@ fn ydotool(args: &[String]) -> Result<(), String> {
             }
         }
     }
-    let ok = Command::new("ydotool").env("YDOTOOL_SOCKET", &p).args(args).stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false);
+    let ok = crate::hote::commande_env("ydotool", &[("YDOTOOL_SOCKET", p.as_os_str())]).args(args).stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false);
     if ok { Ok(()) } else { Err(t!("ydotool n'a pas pu envoyer les touches (accès à /dev/uinput ?).").into()) }
 }
 
@@ -443,7 +443,7 @@ pub fn son(action: &str, valeur: Option<u32>) -> Result<String, String> {
         "muet" => (vec!["set-mute".into(), cible.into(), "toggle".into()], t!("Son coupé ou rétabli.").into()),
         a => return Err(t!("action de son inconnue : {}", a)),
     };
-    let ok = Command::new("wpctl").args(&args).status().map(|s| s.success()).unwrap_or(false);
+    let ok = crate::hote::commande("wpctl").args(&args).status().map(|s| s.success()).unwrap_or(false);
     if ok { Ok(msg) } else { Err(t!("wpctl a échoué.").into()) }
 }
 
@@ -455,9 +455,9 @@ pub fn lecteur(action: &str) -> Result<String, String> {
         "precedent" | "précédent" => "Previous",
         a => return Err(t!("action de lecteur inconnue : {}", a)),
     };
-    let noms = Command::new("qdbus6").stderr(Stdio::null()).output().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+    let noms = crate::hote::commande("qdbus6").stderr(Stdio::null()).output().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
     let lecteur = noms.lines().map(str::trim).find(|l| l.starts_with("org.mpris.MediaPlayer2.")).ok_or(t!("Aucun lecteur multimédia ouvert."))?.to_string();
-    let ok = Command::new("qdbus6").args([&lecteur, "/org/mpris/MediaPlayer2", &format!("org.mpris.MediaPlayer2.Player.{methode}")]).status().map(|s| s.success()).unwrap_or(false);
+    let ok = crate::hote::commande("qdbus6").args([&lecteur, "/org/mpris/MediaPlayer2", &format!("org.mpris.MediaPlayer2.Player.{methode}")]).status().map(|s| s.success()).unwrap_or(false);
     if ok { Ok(t!("Lecteur : {}.", action)) } else { Err(t!("Le lecteur n'a pas répondu.").into()) }
 }
 
@@ -465,9 +465,9 @@ pub fn lecteur(action: &str) -> Result<String, String> {
 pub fn luminosite(pourcent: u32) -> Result<String, String> {
     let svc = "org.kde.Solid.PowerManagement";
     let chemin = "/org/kde/Solid/PowerManagement/Actions/BrightnessControl";
-    let max: u32 = Command::new("qdbus6").args([svc, chemin, "brightnessMax"]).output().ok().and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok()).ok_or(t!("Luminosité non réglable ici."))?;
+    let max: u32 = crate::hote::commande("qdbus6").args([svc, chemin, "brightnessMax"]).output().ok().and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok()).ok_or(t!("Luminosité non réglable ici."))?;
     let v = (max * pourcent.min(100) / 100).max(1);
-    let ok = Command::new("qdbus6").args([svc, chemin, "setBrightness", &v.to_string()]).status().map(|s| s.success()).unwrap_or(false);
+    let ok = crate::hote::commande("qdbus6").args([svc, chemin, "setBrightness", &v.to_string()]).status().map(|s| s.success()).unwrap_or(false);
     if ok { Ok(t!("Luminosité à {} %.", pourcent.min(100))) } else { Err(t!("Le réglage de luminosité a échoué.").into()) }
 }
 

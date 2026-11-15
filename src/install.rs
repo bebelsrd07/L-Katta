@@ -13,6 +13,9 @@ fn desktop(exec: &str, name: &str, comment: &str, extra: &str) -> String {
 }
 
 pub fn install() -> Result<(), String> {
+    if let Some(g) = crate::hote::gestionnaire() {
+        return Err(t!("L Katta est déjà installé par {} : rien à copier. Démarrage automatique : lkatta demarrage on", g));
+    }
     let home = paths::home_dir();
     let bin = home.join(".local/bin/lkatta");
     // Lancé depuis l'AppImage : on installe l'AppImage entière (un seul fichier).
@@ -68,8 +71,10 @@ pub fn sync_autostart(on: bool) -> Result<String, String> {
     }
     let exe = lanceur();
     std::fs::create_dir_all(file.parent().unwrap()).map_err(|e| e.to_string())?;
-    // Une AppImage se lance sans passer par AppImageLauncher (pas de fenêtre à chaque session).
-    let exec = format!("env APPIMAGELAUNCHER_DISABLE=1 {}", exe.display());
+    // Une AppImage se lance sans passer par AppImageLauncher (pas de fenêtre à chaque session) ;
+    // le Flatpak par `flatpak run`.
+    let _ = &exe;
+    let exec = crate::hote::lanceur_bureau();
     std::fs::write(
         &file,
         desktop(&exec, "L Katta (maki)", "Le petit maki assistant du bureau", "X-KDE-autostart-phase=2\nX-GNOME-Autostart-enabled=true\n"),

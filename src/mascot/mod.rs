@@ -640,7 +640,7 @@ impl App {
             }
             "Lire" => {
                 if let Some(l) = &b.msg.link {
-                    let _ = std::process::Command::new("xdg-open").arg(l).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+                    let _ = crate::hote::commande("xdg-open").arg(l).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
                 }
             }
             _ => self.maki.set_expr(behavior::Expr::Happy, 1.5),
@@ -963,12 +963,8 @@ impl App {
             {
                 // Relance après l'arrêt ; une erreur éventuelle est gardée dans relance.log.
                 let log = crate::paths::data_dir().join("relance.log");
-                let _ = std::process::Command::new("sh")
-                    .args(["-c", &format!(
-                        "sleep 1.6; APPIMAGELAUNCHER_DISABLE=1 exec setsid '{}' >'{}' 2>&1",
-                        crate::paths::self_exe().display(),
-                        log.display()
-                    )])
+                let _ = crate::hote::commande("sh")
+                    .args(["-c", &format!("sleep 1.6; {} >'{}' 2>&1", crate::hote::relancer_lkatta(), log.display())])
                     .stdin(std::process::Stdio::null())
                     .spawn();
             }
@@ -1492,7 +1488,7 @@ impl App {
                 } else if let Some((_, u)) = lay.links.iter().find(|(r, _)| hit(*r, local)) {
                     // Lien d'une réponse : ouvert dans le navigateur (adresses web seulement).
                     if u.starts_with("https://") || u.starts_with("http://") {
-                        let _ = std::process::Command::new("xdg-open").arg(u).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+                        let _ = crate::hote::commande("xdg-open").arg(u).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
                         self.chat.entries.push(crate::chat::Entry::Info(t!("Ouvert : {}", u)));
                     }
                 } else if let Some((_, t)) = lay.copy.iter().find(|(r, _)| hit(*r, local)) {

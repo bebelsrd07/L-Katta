@@ -74,6 +74,17 @@ index, agenda, web), puis `cargo audit` (base RustSec, 228 dépendances de `Carg
   lance `lkatta raccourci`. Une combinaison déjà prise par un autre raccourci personnalisé n'est
   jamais remplacée ; `lkatta desinstaller` le retire.
 
+## Paquets (0.3.1)
+
+- **Flatpak : pas de bac à sable.** L Katta a besoin des programmes de la machine (terminal,
+  gdbus, presse-papiers, gestionnaire de paquets) : il les lance par `flatpak-spawn --host`
+  (`--talk-name=org.freedesktop.Flatpak`, bus de session entier, dossier personnel). Ses droits
+  sont ceux de l'utilisateur, comme l'AppImage ; le manifeste et la fiche AppStream le disent.
+  Les règles de l'administrateur sont lues dans /run/host/etc/lkatta (accès host-etc en lecture).
+- **Installé par pacman ou Flatpak** : la mise à jour intégrée ne remplace rien (`hote::gestionnaire`),
+  le gestionnaire de paquets garde la main sur /usr/bin et /app.
+- **AUR** : `lkatta-bin` vérifie l'archive par son SHA-256, pris dans le SHA256SUMS signé.
+
 ## Non corrigé, à décider
 
 - **Bac à sable.** Les commandes acceptées par l'utilisateur tournent avec ses droits. Un bac à

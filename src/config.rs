@@ -215,10 +215,9 @@ fn default_prenom() -> String {
     user
 }
 
+/// Le programme existe-t-il sur la machine (hors du bac à sable Flatpak le cas échéant) ?
 pub fn which(cmd: &str) -> bool {
-    std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).any(|d| d.join(cmd).is_file()))
-        .unwrap_or(false)
+    crate::hote::existe(cmd)
 }
 
 /// Le moteur intégré (url spéciale `integre`) : aucun serveur, aucun compte.

@@ -22,6 +22,8 @@ grep -q "^## $v " CHANGELOG.md || { echo "CHANGELOG.md n'a pas d'entrée $v" >&2
 cargo test --locked
 RUSTFLAGS="-D warnings" cargo build --locked
 appimage="$(bash scripts/appimage.sh | tail -n1)"
+# Le binaire doit démarrer sur Ubuntu 22.04, Debian 12, Fedora… pas seulement sur Arch.
+tool/glibc-max.sh target/release/lkatta
 
 d="dist/lkatta-$v-x86_64-linux"
 rm -rf "$d" && mkdir -p "$d/docs" "$d/fonts"

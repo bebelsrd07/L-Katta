@@ -202,7 +202,14 @@ Une application généraliste qui s'adapte à chaque utilisateur. Ordre recomman
      fractionnaire (l'extension envoie la taille de sa scène, L Katta en déduit le facteur
      Xwayland). Vérifié : tests (notation des touches, facteur). Reste : essai réel ; la bulle
      prend-elle le clavier sous GNOME (Mutter et SetInputFocus d'une fenêtre override-redirect) ?
-5. **Distribution** : AUR, Flatpak.
+5. **Distribution** (0.3.1) : ✔ paquets AUR `lkatta-bin` et `lkatta` (packaging/aur, essayés avec
+   makepkg ; `tool/aur.sh` les met à la version publiée, `--envoyer` les pousse) ; ✔ manifeste
+   Flatpak (packaging/flatpak) : programmes de la machine par `flatpak-spawn --host` (src/hote.rs),
+   dossiers de la machine, mise à jour laissée au gestionnaire. ✔ binaire compatible glibc 2.35
+   (src/glibc.rs, `tool/glibc-max.sh` dans publier.sh). Reste : compte AUR et premier envoi
+   (Antsa) ; construire et essayer le Flatpak (SDK 25.08 + rust-stable à télécharger) ;
+   Flathub refuserait sans doute un Flatpak qui lance tout sur la machine : paquet .flatpak
+   joint aux versions à la place.
 
 ## Ensuite (0.2.x)
 

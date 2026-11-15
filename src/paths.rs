@@ -7,6 +7,9 @@ fn home() -> PathBuf {
 }
 
 fn xdg(var: &str, fallback: &str) -> PathBuf {
+    // Dans le Flatpak : les dossiers de la machine (~/.config/lkatta…), les mêmes que ceux de
+    // l'AppImage ; ceux du bac à sable (~/.var/app/…) ne sont pas vus par KWin ni GNOME Shell.
+    let var = if std::path::Path::new("/.flatpak-info").exists() { format!("HOST_{var}") } else { var.to_string() };
     std::env::var_os(var)
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
@@ -25,8 +28,13 @@ pub fn data_dir() -> PathBuf {
 
 /// Dossier d'exécution (socket, verrous). Repli sur le dossier de données.
 pub fn runtime_dir() -> PathBuf {
+    // Flatpak : seul $XDG_RUNTIME_DIR/app/<id> est commun aux instances (maki et `flatpak run … dire`).
+    let flatpak = std::env::var("FLATPAK_ID").ok().filter(|_| std::path::Path::new("/.flatpak-info").exists());
     std::env::var_os("XDG_RUNTIME_DIR")
-        .map(|p| PathBuf::from(p).join("lkatta"))
+        .map(|p| match &flatpak {
+            Some(id) => PathBuf::from(p).join("app").join(id).join("lkatta"),
+            None => PathBuf::from(p).join("lkatta"),
+        })
         .unwrap_or_else(|| data_dir().join("run"))
 }
 

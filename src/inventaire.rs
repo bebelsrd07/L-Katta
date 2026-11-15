@@ -2,7 +2,7 @@
 //! machine Linux (n'importe quelle distribution, carte graphique ou bureau) : chaque rubrique
 //! se tait si l'information manque, aucun outil n'est supposé installé.
 
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 fn lire(p: &str) -> String {
     std::fs::read_to_string(p).unwrap_or_default()
@@ -10,7 +10,7 @@ fn lire(p: &str) -> String {
 
 /// Sortie d'une commande si elle existe et réussit (jamais d'erreur affichée).
 fn cmd(prog: &str, args: &[&str]) -> Option<String> {
-    let o = Command::new(prog).args(args).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+    let o = crate::hote::commande(prog).args(args).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
     o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|s| !s.is_empty())
 }
 

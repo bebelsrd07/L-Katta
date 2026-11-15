@@ -3,12 +3,12 @@
 //! `machine.md` (faits mesurés, régénérable) + `prompt.md` (personnalité et règles,
 //! éditable à la main et jamais écrasé) = le prompt système envoyé au moteur.
 
-use std::process::Command;
+
 
 use crate::{config::which, paths};
 
 fn run(cmd: &str, args: &[&str]) -> String {
-    Command::new(cmd)
+    crate::hote::commande(cmd)
         .args(args)
         .output()
         .ok()

@@ -1,0 +1,59 @@
+# Flatpak de L Katta. Construire (depuis la racine du dépôt) :
+#   flatpak-builder --user --install --force-clean build-flatpak packaging/flatpak/io.github.raantss18.LKatta.yml
+# ou un paquet à partager :
+#   flatpak-builder --repo=repo-flatpak --force-clean build-flatpak packaging/flatpak/io.github.raantss18.LKatta.yml
+#   flatpak build-bundle repo-flatpak LKatta.flatpak io.github.raantss18.LKatta
+#
+# Ce n'est PAS un bac à sable : L Katta lance les programmes de la machine (terminal, gdbus,
+# presse-papiers, gestionnaire de paquets…) par `flatpak-spawn --host`, lit le dossier personnel
+# et parle à tout le bus de session (KWin, GNOME Shell, notifications). Voir docs/SECURITE.md.
+id: io.github.raantss18.LKatta
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: lkatta
+finish-args:
+  # Le maki : Wayland (layer-shell), sinon X11 (GNOME par Xwayland, XFCE, i3…).
+  - --socket=wayland
+  - --socket=x11
+  - --share=ipc
+  # Moteurs d'IA, mails, agenda, mises à jour des modèles.
+  - --share=network
+  # KWin, KGlobalAccel, GNOME Shell, notifications, nom org.lkatta.Maki, flatpak-spawn.
+  - --socket=session-bus
+  - --talk-name=org.freedesktop.Flatpak
+  # Fichiers de l'utilisateur (index, pièces jointes, projets) et dossiers ~/.config/lkatta…
+  - --filesystem=home
+  # Règles de l'administrateur (/etc/lkatta), lues dans /run/host/etc.
+  - --filesystem=host-etc:ro
+modules:
+  - name: lkatta
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      # Les dépendances Rust sont téléchargées pendant la construction (Cargo.lock fait foi).
+      build-args:
+        - --share=network
+      env:
+        CARGO_HOME: /run/build/lkatta/cargo
+    build-commands:
+      - cargo build --release --locked
+      - install -Dm755 target/release/lkatta /app/bin/lkatta
+      - install -Dm644 packaging/linux/lkatta.desktop /app/share/applications/io.github.raantss18.LKatta.desktop
+      - sed -i 's/^Icon=lkatta$/Icon=io.github.raantss18.LKatta/' /app/share/applications/io.github.raantss18.LKatta.desktop
+      - install -d /app/share/icons/hicolor/256x256/apps
+      - HOME="$PWD" target/release/lkatta icone /app/share/icons/hicolor/256x256/apps/io.github.raantss18.LKatta.png
+      - install -Dm644 packaging/flatpak/io.github.raantss18.LKatta.metainfo.xml -t /app/share/metainfo/
+      - install -Dm644 LICENSE NOTICE -t /app/share/licenses/io.github.raantss18.LKatta/
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - target
+          - dist
+          - release-keys
+          - build-flatpak
+          - repo-flatpak
+          - .flatpak-builder

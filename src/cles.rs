@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
 
 /// Un fournisseur gratuit qui demande une clé.
@@ -53,14 +53,14 @@ fn cache() -> &'static Mutex<HashMap<String, Option<String>>> {
 }
 
 fn lookup(attrs: &[&str]) -> Option<String> {
-    let o = Command::new("secret-tool").arg("lookup").args(attrs).stderr(Stdio::null()).output().ok()?;
+    let o = crate::hote::commande("secret-tool").arg("lookup").args(attrs).stderr(Stdio::null()).output().ok()?;
     let v = String::from_utf8_lossy(&o.stdout).trim_end_matches('\n').to_string();
     (!v.is_empty()).then_some(v)
 }
 
 /// Range un secret dans le trousseau (lu sur l'entrée standard, jamais en argument).
 pub fn store(label: &str, attrs: &[&str], secret: &str) -> Result<(), String> {
-    let mut child = Command::new("secret-tool")
+    let mut child = crate::hote::commande("secret-tool")
         .arg("store")
         .arg(format!("--label={label}"))
         .args(attrs)
@@ -76,7 +76,7 @@ pub fn store(label: &str, attrs: &[&str], secret: &str) -> Result<(), String> {
 }
 
 pub fn clear(attrs: &[&str]) {
-    let _ = Command::new("secret-tool").arg("clear").args(attrs).status();
+    let _ = crate::hote::commande("secret-tool").arg("clear").args(attrs).status();
     cache().lock().map(|mut c| c.clear()).ok();
 }
 

@@ -24,7 +24,7 @@ pub fn capturer() -> Result<Vec<u8>, String> {
     // Le maki se rend invisible (sans bouger) le temps de la capture.
     let _ = crate::ipc::send("capture on");
     std::thread::sleep(Duration::from_millis(400));
-    let mut c = std::process::Command::new(outil);
+    let mut c = crate::hote::commande(outil);
     match outil {
         "spectacle" => c.args(["--background", "--nonotify", "--current", "--output"]),
         "gnome-screenshot" => c.arg("-f"),

@@ -4,7 +4,7 @@
 //! (`x-kde-passwordManagerHint`) ne sont jamais enregistrées.
 
 use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -49,13 +49,13 @@ fn wayland() -> bool {
 pub fn copy(texte: &str) -> std::io::Result<()> {
     use std::io::Write;
     let mut cmd = if wayland() {
-        Command::new("wl-copy")
+        crate::hote::commande("wl-copy")
     } else if crate::config::which("xclip") {
-        let mut c = Command::new("xclip");
+        let mut c = crate::hote::commande("xclip");
         c.args(["-selection", "clipboard"]);
         c
     } else {
-        let mut c = Command::new("xsel");
+        let mut c = crate::hote::commande("xsel");
         c.arg("-ib");
         c
     };
@@ -68,15 +68,15 @@ pub fn copy(texte: &str) -> std::io::Result<()> {
 /// Texte du presse-papiers (wl-paste, sinon xclip ou xsel sous X11).
 pub fn coller() -> Option<Vec<u8>> {
     let mut cmd = if wayland() {
-        let mut c = Command::new("wl-paste");
+        let mut c = crate::hote::commande("wl-paste");
         c.args(["--no-newline", "--type", "text"]);
         c
     } else if crate::config::which("xclip") {
-        let mut c = Command::new("xclip");
+        let mut c = crate::hote::commande("xclip");
         c.args(["-selection", "clipboard", "-o"]);
         c
     } else {
-        let mut c = Command::new("xsel");
+        let mut c = crate::hote::commande("xsel");
         c.arg("-ob");
         c
     };
@@ -94,7 +94,7 @@ pub fn watch(max: usize, mut on_new: impl FnMut(&str)) {
         return;
     }
     // Meurt avec le maki : sinon une relance laisse un surveillant orphelin.
-    let child = crate::paths::mourir_avec_parent(&mut Command::new("wl-paste"))
+    let child = crate::paths::mourir_avec_parent(&mut crate::hote::commande("wl-paste"))
         .args(["--type", "text", "--watch", "sh", "-c", WATCH_SCRIPT])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

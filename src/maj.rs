@@ -158,6 +158,9 @@ fn is_appimage(p: &std::path::Path) -> bool {
 
 /// Télécharge, vérifie, installe. Renvoie la nouvelle version.
 pub fn install(rel: &Release) -> Result<String, String> {
+    if let Some(g) = crate::hote::gestionnaire() {
+        return Err(t!("L Katta a été installé par {} : mets-le à jour avec lui (version {} disponible).", g, rel.version));
+    }
     let exe = match std::env::var_os("APPIMAGE") {
         Some(a) => PathBuf::from(a),
         None => crate::paths::self_exe(),

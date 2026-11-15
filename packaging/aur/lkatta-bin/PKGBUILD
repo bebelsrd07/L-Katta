@@ -1,0 +1,50 @@
+# Maintainer: RANIRIAMANJAKA Antsa <https://github.com/raantss18>
+# Fichier tenu dans https://github.com/raantss18/L-Katta (packaging/aur), mis à jour par tool/aur.sh.
+pkgname=lkatta-bin
+pkgver=0.3.0
+pkgrel=1
+pkgdesc="Petit maki (lémurien) assistant de bureau avec IA : discussion, fichiers, mails, agenda, fenêtres"
+arch=('x86_64')
+url="https://github.com/raantss18/L-Katta"
+license=('Apache-2.0')
+depends=('glibc' 'gcc-libs' 'libxkbcommon')
+optdepends=(
+  'wl-clipboard: presse-papiers sous Wayland'
+  'xclip: presse-papiers sous X11'
+  'libsecret: clés et mots de passe rangés dans le trousseau (secret-tool)'
+  'poppler: lecture des PDF (pdftotext)'
+  'libpulse: détection du micro pendant une visio (pactl)'
+  'xdg-utils: ouvrir liens et fichiers'
+  'curl: mails (IMAP, SMTP)'
+  'kdotool: fenêtres sous KDE Plasma'
+  'ollama: modèle d IA local de secours'
+)
+provides=('lkatta')
+conflicts=('lkatta')
+source=("$url/releases/download/v$pkgver/lkatta-$pkgver-x86_64-linux.tar.gz")
+sha256sums=('76aac520276a925866ac322b1f76b435e90f0a5653397ffdccc3e363f8a69516')
+
+package() {
+  cd "lkatta-$pkgver-x86_64-linux"
+  install -Dm755 lkatta "$pkgdir/usr/bin/lkatta"
+  install -Dm644 LICENSE NOTICE -t "$pkgdir/usr/share/licenses/$pkgname/"
+  install -Dm644 fonts/*.txt -t "$pkgdir/usr/share/licenses/$pkgname/fonts/"
+  install -Dm644 README.md CHANGELOG.md -t "$pkgdir/usr/share/doc/lkatta/"
+  install -Dm644 docs/*.md -t "$pkgdir/usr/share/doc/lkatta/docs/"
+  install -d "$pkgdir/usr/share/icons/hicolor/256x256/apps" "$pkgdir/usr/share/applications"
+  # Icône et lanceur fabriqués par le binaire lui-même (aucun fichier écrit ailleurs).
+  HOME="$srcdir" ./lkatta icone "$pkgdir/usr/share/icons/hicolor/256x256/apps/lkatta.png" >/dev/null
+  cat > "$pkgdir/usr/share/applications/lkatta.desktop" <<DESK
+[Desktop Entry]
+Type=Application
+Name=L Katta
+Comment=Un petit lémurien assistant sur ton bureau
+Comment[en]=A little lemur assistant on your desktop
+Exec=lkatta
+Icon=lkatta
+Terminal=false
+Categories=Utility;
+Keywords=assistant;ia;ai;maki;lemur;
+StartupWMClass=lkatta
+DESK
+}

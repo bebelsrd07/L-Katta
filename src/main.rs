@@ -5,6 +5,8 @@ mod lang;
 
 mod apropos;
 mod brain;
+mod glibc;
+mod hote;
 mod garde;
 mod bureau;
 mod chat;
