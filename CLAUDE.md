@@ -70,3 +70,7 @@
   et leur montage FUSE dans XDG_RUNTIME_DIR) survivent : les arrêter par PID après avoir vérifié
   dans /proc/PID/environ qu'ils parlent au bus d'essai, puis vérifier qu'aucun
   target/debug/lkatta ne reste.
+- GNOME : extension pont dans assets/gnome/<uuid>/ (embarquée par include_str!, src/gnome.rs),
+  ES modules GNOME 45+. Elle envoie la fenêtre active à org.lkatta.Maki (comme le script KWin)
+  et offre /org/lkatta/Gnome chez org.gnome.Shell. Toute chaîne nouvelle passe par t!() ET
+  src/lang/en_*.rs (test every_text_has_an_english_translation).

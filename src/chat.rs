@@ -863,7 +863,7 @@ impl Chat {
         };
         Some(match cmd {
             "/aide" => Entry::Info(
-                t!("/discussion · /code (côtés) · /dossier <chemin> (projet du côté Code) · /fils (historique) · /nouveau (nouveau fil) · /historique <mots> · /mails · /agenda · /modeles (choisir le modèle) · /reglages · /regle · /especes · /moteurs · /maj · /rappels · /afaire [chose] (liste à faire) · /trouve <mots> (fichiers par leur contenu) · /inventaire · /machine (bureau et applications) · /presse · /etat · /sante · /apps · /retiens <fait> · /accueil (premiers réglages) · /cherche [question] (recherche approfondie) · /lis [question] (texte de la fenêtre active) · /ecran [question] (capture de l'écran) · /notifs · /traduis /resume /corrige /explique (texte copié) · /souvenirs · /oublie <mot> · /local (modèle hors ligne). Trombone ou Ctrl+O = joindre des fichiers. Clic sur une réponse = copiée. Flèches, Maj, Ctrl+A/C/X/V dans la saisie. Échap = arrêter (pendant une réponse) ou fermer.")
+                t!("/discussion · /code (côtés) · /dossier <chemin> (projet du côté Code) · /fils (historique) · /nouveau (nouveau fil) · /historique <mots> · /mails · /agenda · /modeles (choisir le modèle) · /reglages · /regle · /especes · /moteurs · /maj · /rappels · /afaire [chose] (liste à faire) · /trouve <mots> (fichiers par leur contenu) · /inventaire · /machine (bureau et applications) · /gnome (extension pour GNOME) · /presse · /etat · /sante · /apps · /retiens <fait> · /accueil (premiers réglages) · /cherche [question] (recherche approfondie) · /lis [question] (texte de la fenêtre active) · /ecran [question] (capture de l'écran) · /notifs · /traduis /resume /corrige /explique (texte copié) · /souvenirs · /oublie <mot> · /local (modèle hors ligne). Trombone ou Ctrl+O = joindre des fichiers. Clic sur une réponse = copiée. Flèches, Maj, Ctrl+A/C/X/V dans la saisie. Échap = arrêter (pendant une réponse) ou fermer.")
                     .into(),
             ),
             "/rappels" => Entry::Maki(tools::list_reminders()),
@@ -878,6 +878,15 @@ impl Chat {
                 Err(e) => Entry::Info(e),
             },
             "/inventaire" => Entry::Maki(crate::inventaire::texte()),
+            "/gnome" if rest == "retirer" => match crate::gnome::retirer() {
+                Ok(m) => Entry::Maki(m),
+                Err(e) => Entry::Error(e),
+            },
+            "/gnome" if !crate::gnome::bureau_gnome() => Entry::Info(t!("Ce bureau n'est pas GNOME : l'extension ne sert qu'à GNOME Shell.").into()),
+            "/gnome" => match crate::gnome::installer() {
+                Ok(m) => Entry::Maki(m),
+                Err(e) => Entry::Error(e),
+            },
             "/machine" if rest == "revoir" || rest == "redetecter" => {
                 let e = crate::environnement::detecter();
                 match crate::environnement::enregistrer(&e) {

@@ -141,4 +141,13 @@ pub const T: &[(&str, &str)] = &[
     ("Me voilà en aye-aye : grandes oreilles, et un doigt qui tapote.", "Aye-aye mode: big ears and a tapping finger."),
     ("Me voilà en microcèbe : tout petit, mais j'ai l'œil !", "Mouse lemur mode: tiny, but I don't miss a thing!"),
     ("Me voilà en vari : attention, je peux crier fort !", "Ruffed lemur mode: careful, I can be loud!"),
+    // GNOME (extension)
+    ("Ce bureau n'est pas GNOME : l'extension ne sert qu'à GNOME Shell.", "This desktop is not GNOME: the extension is only for GNOME Shell."),
+    ("l'extension GNOME de L Katta n'est pas active : tape /gnome pour l'installer", "L Katta's GNOME extension is not active: type /gnome to install it"),
+    ("Extension GNOME installée. Ferme ta session et rouvre-la une fois (GNOME ne charge une nouvelle extension qu'à l'ouverture de session) : ensuite je verrai tes fenêtres, je me cacherai devant le plein écran et je pourrai les manipuler à ta demande.", "GNOME extension installed. Log out and back in once (GNOME only loads a new extension when a session starts): then I'll see your windows, hide during full screen and handle them when you ask."),
+    ("Extension GNOME retirée.", "GNOME extension removed."),
+    ("Extension GNOME à jour et active : je vois tes fenêtres.", "GNOME extension up to date and active: I can see your windows."),
+    ("GNOME ne trouve plus cette fenêtre (fermée entre-temps ?)", "GNOME can't find that window any more (closed in the meantime?)"),
+    ("Sous GNOME, je ne vois pas tes fenêtres sans une petite extension (je me cacherais devant tes vidéos en plein écran, je pourrais les manipuler à ta demande). Tape /gnome dans la bulle pour l'installer.", "On GNOME, I can't see your windows without a small extension (with it I'd hide during full-screen videos and handle windows when you ask). Type /gnome in the bubble to install it."),
+    ("extension copiée dans {}, mais je n'ai pas pu l'activer : ouvre « Extensions » et active « L Katta »", "extension copied to {}, but I couldn't enable it: open \"Extensions\" and turn on \"L Katta\""),
 ];

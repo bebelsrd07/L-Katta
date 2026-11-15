@@ -97,6 +97,15 @@ struct Service {
     tx: Box<dyn Fn(Msg) + Send + Sync>,
 }
 
+/// Un pont du bureau (script KWin, extension GNOME) a envoyé la fenêtre active : il voit
+/// toutes les fenêtres, mieux que les conventions X11 (qui sous Xwayland ne voient que les
+/// fenêtres X11).
+static PONT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn pont_actif() -> bool {
+    PONT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 #[zbus::interface(name = "org.lkatta.Maki")]
 impl Service {
     /// La fenêtre active, en JSON (KWin envoie les nombres entiers en `int` : un seul texte
@@ -104,6 +113,7 @@ impl Service {
     #[zbus(name = "Fenetre")]
     fn fenetre(&self, json: String) {
         if let Some(f) = Fenetre::from_json(&json) {
+            PONT.store(true, std::sync::atomic::Ordering::Relaxed);
             (self.tx)(Msg::Fenetre(f));
         }
     }

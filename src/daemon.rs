@@ -179,6 +179,17 @@ pub fn run() -> Result<(), String> {
         });
     }
 
+    // GNOME : l'extension de L Katta (pont des fenêtres) tenue à jour, ou proposée une fois.
+    {
+        let t = tx.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(20));
+            if let Some(m) = crate::gnome::au_demarrage() {
+                let _ = t.send(Msg::Say(m));
+            }
+        });
+    }
+
     // Fenêtre active (script KWin), « Ne pas déranger », micro : pour rester discret.
     {
         let t1 = tx.clone();

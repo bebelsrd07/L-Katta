@@ -186,7 +186,20 @@ Une application généraliste qui s'adapte à chaque utilisateur. Ordre recomman
      virtuel. Le maki X11 s'arrête quand son serveur X disparaît (il tournait à vide) ;
    - d. ✔ choix automatique : Wayland avec layer-shell, sinon X11 (`DISPLAY`) — GNOME compris,
      par Xwayland ; `LKATTA_AFFICHAGE=x11` force X11 pour les essais.
-4. **GNOME (Wayland)** : extension GNOME Shell qui accueille le maki (GNOME refuse layer-shell).
+4. **GNOME (Wayland)** : GNOME refuse layer-shell ; le maki y vit par Xwayland (affichage X11,
+   0.2.7), mais Xwayland ne voit que les fenêtres X11. Choix retenu : une petite extension qui
+   sert de pont, comme le script KWin (assets/gnome/, src/gnome.rs), plutôt que dessiner le maki
+   dans GNOME Shell (lourd, à refaire à chaque version de GNOME).
+   - a. ✔ extension (GNOME 45 à 50, modules ES) : fenêtre active → `org.lkatta.Maki.Fenetre`
+     (même JSON que KWin), objet `/org/lkatta/Gnome` chez org.gnome.Shell (Fenetres, Action :
+     activer, réduire, agrandir, fermer) ; installée sur demande (`/gnome`, `lkatta gnome`),
+     proposée une fois au démarrage, fichiers remis à jour ensuite ; outil « gnome » dans
+     controle.rs ; écran déduit de la position ; les conventions X11 se taisent quand un pont
+     parle. Vérifié : tests du côté L Katta, syntaxe de l'extension. Reste : essai dans un vrai
+     GNOME Shell (conteneur avec `gnome-shell --headless`, ou une machine GNOME) ;
+   - b. à voir : « Ne pas déranger » de GNOME (org.gnome.desktop.notifications show-banners),
+     raccourci global (org.gnome.settings-daemon custom-keybindings), échelle fractionnaire
+     (coordonnées Xwayland ≠ coordonnées GNOME).
 5. **Distribution** : AUR, Flatpak.
 
 ## Ensuite (0.2.x)

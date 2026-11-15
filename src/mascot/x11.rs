@@ -884,6 +884,11 @@ fn bureau(app: &mut super::App) -> bool {
             crate::toplevels::mettre_a_jour(v.f.id, Some(v.f.clone()));
         }
     }
+    // Un pont du bureau (extension GNOME, script KWin) donne déjà la fenêtre active, applications
+    // Wayland comprises : on ne le contredit pas.
+    if crate::bureau::pont_actif() {
+        return true;
+    }
     let f = vues.into_iter().find(|v| v.f.id == id).map(|v| v.f);
     let rect = rect.unwrap_or((0.0, 0.0, 0.0, 0.0));
     let centre = (rect.0 + rect.2 / 2.0, rect.1 + rect.3 / 2.0);

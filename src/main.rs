@@ -50,6 +50,7 @@ mod notifs;
 mod terminal;
 mod tools;
 mod toplevels;
+mod gnome;
 mod web;
 
 /// Aide (texte source français ; traduite par `t!` à l'affichage).
@@ -281,6 +282,10 @@ fn main() {
         }
         "verifier-signature" => maj::verifier_fichiers(args.get(1).map(String::as_str).unwrap_or("SHA256SUMS"), args.get(2).map(String::as_str).unwrap_or("SHA256SUMS.sig")).map(|_| println!("signature valide")),
         "lire-fenetre" | "read-window" => crate::atspi::fenetre_active(None).map(|l| println!("[{} — {}]\n{}", l.application, l.titre, l.texte)),
+        "gnome" => match args.get(1).map(String::as_str) {
+            Some("retirer") | Some("remove") => gnome::retirer().map(|m| println!("{m}")),
+            _ => gnome::installer().map(|m| println!("{m}")),
+        },
         "x11-essai" => {
             let capture = args.iter().position(|a| a == "--capture").and_then(|i| args.get(i + 1)).map(String::as_str);
             let duree = args.iter().position(|a| a == "--duree").and_then(|i| args.get(i + 1)).and_then(|d| d.parse().ok()).unwrap_or(8.0);

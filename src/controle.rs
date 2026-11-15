@@ -90,8 +90,19 @@ fn kdotool(args: &[&str]) -> Result<String, String> {
 /// Outil des fenêtres de ce bureau : kdotool (KDE), hyprctl (Hyprland), swaymsg (Sway).
 fn outil() -> String {
     let o = crate::environnement::courant().fenetres;
-    // Sans outil dédié : le protocole Wayland standard, si le compositeur l'offre.
-    if (o.is_empty() || o == "aucun") && crate::toplevels::disponible() { "wayland".into() } else { o }
+    if o.is_empty() || o == "aucun" {
+        // GNOME : l'extension de L Katta voit toutes les fenêtres (Xwayland n'en voit qu'une
+        // partie).
+        if crate::gnome::bureau_gnome() && crate::gnome::active() {
+            return "gnome".into();
+        }
+        // Sans outil dédié : le protocole Wayland standard (ou les conventions X11), si le
+        // bureau l'offre.
+        if crate::toplevels::disponible() {
+            return "wayland".into();
+        }
+    }
+    o
 }
 
 fn depuis_wl(f: crate::toplevels::Fenetre) -> Fenetre {
@@ -147,7 +158,9 @@ pub fn fenetres() -> Result<Vec<Fenetre>, String> {
         "hyprctl" => return Ok(fenetres_hypr(&sortie_json("hyprctl", &["clients", "-j"])?).into_iter().filter(garder).collect()),
         "swaymsg" => return Ok(fenetres_sway(&sortie_json("swaymsg", &["-t", "get_tree"])?).into_iter().map(|(f, _)| f).filter(garder).collect()),
         "wayland" => return Ok(crate::toplevels::liste().into_iter().map(depuis_wl).filter(garder).collect()),
+        "gnome" => return Ok(crate::gnome::fenetres()?.into_iter().map(depuis_wl).filter(garder).collect()),
         "kdotool" => {}
+        _ if crate::gnome::bureau_gnome() => return Err(t!("l'extension GNOME de L Katta n'est pas active : tape /gnome pour l'installer").into()),
         _ if !which("kdotool") => return Err(t!("je ne sais pas encore piloter les fenêtres de ce bureau (KDE avec kdotool, Hyprland, Sway et les bureaux qui offrent le protocole Wayland standard sont gérés)").into()),
         _ => {}
     }
@@ -173,6 +186,7 @@ pub fn active() -> Option<Fenetre> {
         }
         "swaymsg" => return fenetres_sway(&sortie_json("swaymsg", &["-t", "get_tree"]).ok()?).into_iter().find(|(_, a)| *a).map(|(f, _)| f),
         "wayland" => return crate::toplevels::active().map(depuis_wl),
+        "gnome" => return crate::gnome::fenetres().ok()?.into_iter().find(|f| f.active).map(depuis_wl),
         _ => {}
     }
     let id = kdotool(&["getactivewindow"]).ok().filter(|s| !s.is_empty())?;
@@ -347,6 +361,7 @@ fn activer(f: &Fenetre) -> Result<(), String> {
             crate::toplevels::demander(f.id.parse().unwrap_or(0), crate::toplevels::Action::Activer);
             Ok(())
         }
+        "gnome" => crate::gnome::action(f.id.parse().unwrap_or(0), "activer"),
         _ => kdotool(&["windowactivate", &f.id]).map(|_| ()),
     }
 }
@@ -354,6 +369,18 @@ fn activer(f: &Fenetre) -> Result<(), String> {
 /// Action sur une fenêtre : activer, reduire, agrandir, fermer, bureau (n).
 pub fn fenetre(f: &Fenetre, action: &str, bureau: Option<u32>) -> Result<String, String> {
     let o = outil();
+    if o == "gnome" {
+        let id: u32 = f.id.parse().unwrap_or(0);
+        let m = match action {
+            "activer" => t!("« {} » est au premier plan.", f.titre),
+            "reduire" => t!("« {} » est réduite.", f.titre),
+            "agrandir" => t!("« {} » : taille basculée (agrandie / normale).", f.titre),
+            "fermer" => t!("« {} » : fermeture demandée (l'application peut demander d'enregistrer).", f.titre),
+            "bureau" => return Err(t!("changer une fenêtre de bureau n'est pas possible sur ce bureau").into()),
+            a => return Err(t!("action de fenêtre inconnue : {}", a)),
+        };
+        return crate::gnome::action(id, action).map(|_| m);
+    }
     if o == "wayland" {
         use crate::toplevels::Action;
         let id: u32 = f.id.parse().unwrap_or(0);

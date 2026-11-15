@@ -2,6 +2,13 @@
 
 Règle : chaque chiffre va de 0 à 9 (0.0.9 → 0.1.0, 0.9.9 → 1.0.0).
 
+## 0.3.0 — en cours
+
+- **GNOME** : une petite extension, installée quand tu tapes `/gnome`, permet au maki de voir
+  tes fenêtres sous GNOME (applications Wayland comprises) : il se cache devant une vidéo en
+  plein écran, se tait en visio, grimpe sur les fenêtres, et peut les mettre au premier plan,
+  les réduire, les agrandir ou les fermer à ta demande. `/gnome retirer` l'enlève.
+
 ## 0.2.9 — 2026-11-15
 
 - **Glisser-déposer sous X11** : un fichier glissé depuis le gestionnaire de fichiers (Thunar,

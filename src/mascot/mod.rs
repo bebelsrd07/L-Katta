@@ -779,7 +779,14 @@ impl App {
     }
 
     /// Une fenêtre devient active (script KWin, ou protocole Wayland standard ailleurs).
-    fn on_fenetre(&mut self, f: crate::bureau::Fenetre) {
+    fn on_fenetre(&mut self, mut f: crate::bureau::Fenetre) {
+        // Écran non nommé (extension GNOME) : celui qui contient le centre de la fenêtre.
+        if f.ecran.is_empty() && f.rect.2 > 0.0 {
+            let c = (f.rect.0 + f.rect.2 / 2.0, f.rect.1 + f.rect.3 / 2.0);
+            if let Some(o) = self.screens.iter().map(|s| s.out.clone()).find(|o| self.geom(o).is_some_and(|g| c.0 >= g.0 && c.0 < g.0 + g.2 && c.1 >= g.1 && c.1 < g.1 + g.3)) {
+                f.ecran = self.nom_de(&o).unwrap_or_default();
+            }
+        }
         if std::env::var_os("LKATTA_DEBUG").is_some() {
             eprintln!("fenêtre : {:?} (occupé : {})", f, f.visio() || f.plein_ecran);
         }

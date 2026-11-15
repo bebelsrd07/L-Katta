@@ -1,0 +1,8 @@
+{
+  "uuid": "lkatta@raantss18.github.io",
+  "name": "L Katta",
+  "description": "Pont entre GNOME Shell et L Katta, le maki assistant de bureau : il lui dit quelle fenêtre est active (pour qu'il se cache devant le plein écran et se taise en visio) et lui permet de mettre une fenêtre au premier plan, de la réduire, de l'agrandir ou de la fermer quand tu le lui demandes.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "url": "https://github.com/raantss18/L-Katta",
+  "version": 1
+}

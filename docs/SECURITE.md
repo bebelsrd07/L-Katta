@@ -59,6 +59,17 @@ index, agenda, web), puis `cargo audit` (base RustSec, 228 dépendances de `Carg
 - Les versions 0.2.0 et antérieures vérifient seulement l'empreinte : elles passeront à la
   0.2.1 comme avant, et seront protégées ensuite.
 
+## Extension GNOME (0.3.0)
+
+- Installée seulement à la demande de l'utilisateur (`/gnome`, `lkatta gnome`), dans
+  ~/.local/share/gnome-shell/extensions ; `/gnome retirer` l'enlève.
+- Elle ne lit pas le contenu des fenêtres, ne tape rien, n'ouvre aucun accès réseau. Elle envoie
+  au seul service `org.lkatta.Maki` le titre, l'application, la position et le plein écran de la
+  fenêtre active, sans démarrage automatique.
+- Son objet D-Bus (`/org/lkatta/Gnome` chez org.gnome.Shell) liste les fenêtres et les
+  active, réduit, agrandit ou ferme : comme kdotool sous KDE, tout programme de la session de
+  l'utilisateur peut s'en servir. Pas d'accès depuis une autre session ni un autre utilisateur.
+
 ## Non corrigé, à décider
 
 - **Bac à sable.** Les commandes acceptées par l'utilisateur tournent avec ses droits. Un bac à
