@@ -66,7 +66,8 @@ lkatta &
 Ou l'archive `lkatta-*-x86_64-linux.tar.gz`, ou les sources :
 `cargo build --release && ./target/release/lkatta installer` (AppImage : `scripts/appimage.sh`).
 
-**Arch Linux** (AUR, paquets `lkatta-bin` ou `lkatta` à compiler) : `paru -S lkatta-bin`.
+**Arch Linux** (AUR, paquets `lkatta-bin` ou `lkatta` à compiler, mise en ligne à venir) :
+`paru -S lkatta-bin`.
 Les fichiers sont dans `packaging/aur/` ; la mise à jour passe alors par pacman.
 
 **Flatpak** : le fichier `LKatta-*-x86_64.flatpak` d'une release (à partir de 0.3.1), puis

@@ -2,12 +2,13 @@
 
 Règle : chaque chiffre va de 0 à 9 (0.0.9 → 0.1.0, 0.9.9 → 1.0.0).
 
-## 0.3.1 — en cours
+## 0.3.1 — 2026-11-15
 
 - **Correction importante** : le binaire et l'AppImage exigeaient glibc 2.43, donc ne
   démarraient que sur les distributions les plus récentes (Arch). Ils démarrent maintenant avec
   glibc 2.35 ou plus (Ubuntu 22.04, Debian 12, Fedora…) ; chaque publication le vérifie.
-- **Arch Linux** : paquets AUR `lkatta-bin` (binaire de la version) et `lkatta` (compilé).
+- **Arch Linux** : paquets AUR `lkatta-bin` (binaire de la version) et `lkatta` (compilé),
+  prêts dans `packaging/aur` (mise en ligne sur l'AUR à venir).
 - **Flatpak** : paquet `.flatpak` joint à la version (`flatpak install --user LKatta-…flatpak`) ;
   les programmes de la machine passent par `flatpak-spawn --host`, mêmes dossiers de réglages
   que l'AppImage, nom du système lu sur la machine.
