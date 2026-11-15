@@ -2,7 +2,7 @@
 
 Règle : chaque chiffre va de 0 à 9 (0.0.9 → 0.1.0, 0.9.9 → 1.0.0).
 
-## 0.3.0 — en cours
+## 0.3.0 — 2026-11-15
 
 - **GNOME** : une petite extension, installée quand tu tapes `/gnome`, permet au maki de voir
   tes fenêtres sous GNOME (applications Wayland comprises) : il se cache devant une vidéo en
