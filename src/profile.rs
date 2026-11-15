@@ -22,7 +22,7 @@ fn read(path: &str) -> String {
 }
 
 fn os_release() -> String {
-    let txt = read("/etc/os-release");
+    let txt = read(&crate::hote::etc("/etc/os-release"));
     txt.lines()
         .find_map(|l| l.strip_prefix("PRETTY_NAME="))
         .map(|v| v.trim_matches('"').to_string())
@@ -110,7 +110,7 @@ fn user_dirs() -> String {
 
 /// Mesure la machine et renvoie le texte de `machine.md`.
 pub fn measure() -> String {
-    let host = read("/etc/hostname").trim().to_string();
+    let host = read(&crate::hote::etc("/etc/hostname")).trim().to_string();
     let host = if host.is_empty() { run("uname", &["-n"]) } else { host };
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_else(|_| "inconnu".into());
     let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "inconnue".into());

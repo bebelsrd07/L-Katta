@@ -314,7 +314,7 @@ fn watch_once(_cfg: &Config) -> Vec<crate::conseils::Message> {
     st.vus = constats.iter().map(|c| c.id.clone()).collect();
 
     // Nouvelles Arch Linux (souvent une intervention manuelle avant mise à jour).
-    if std::path::Path::new("/etc/arch-release").exists() {
+    if std::path::Path::new(&crate::hote::etc("/etc/arch-release")).exists() {
         if let Ok(items) = web::feed("https://archlinux.org/feeds/news/", 1) {
             if let Some(n) = items.first() {
                 if !st.arch_news.is_empty() && n.titre != st.arch_news {

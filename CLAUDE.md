@@ -74,6 +74,12 @@
   `Command::new` (sauf le binaire lui-même) : dans le Flatpak ils passent par
   `flatpak-spawn --host`. `config::which` regarde sur la machine. Paquets : packaging/aur
   (`tool/aur.sh`), packaging/flatpak. Glibc : `tool/glibc-max.sh` (2.35 max, src/glibc.rs).
+  Fichiers de /etc : `hote::etc(..)` (/run/host/etc dans le Flatpak). Publier exige aussi
+  `<release version="X.Y.Z">` dans packaging/flatpak/*.metainfo.xml. Essai du Flatpak :
+  `dbus-run-session -- kwin_wayland --virtual …` (KWin et le Flatpak sur le bus d'essai),
+  `flatpak install --user` du paquet puis `flatpak run --env=HOST_XDG_CONFIG_HOME=…` (dossiers
+  d'essai sous ~ : /tmp n'est pas vu) ; désinstaller ensuite. `flatpak build` ne suffit pas
+  (ni WAYLAND_DISPLAY ni $XDG_RUNTIME_DIR/app partagé).
 - GNOME : extension pont dans assets/gnome/<uuid>/ (embarquée par include_str!, src/gnome.rs),
   ES modules GNOME 45+. Elle envoie la fenêtre active à org.lkatta.Maki (comme le script KWin)
   et offre /org/lkatta/Gnome chez org.gnome.Shell. Toute chaîne nouvelle passe par t!() ET

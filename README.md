@@ -69,8 +69,10 @@ Ou l'archive `lkatta-*-x86_64-linux.tar.gz`, ou les sources :
 **Arch Linux** (AUR, paquets `lkatta-bin` ou `lkatta` à compiler) : `paru -S lkatta-bin`.
 Les fichiers sont dans `packaging/aur/` ; la mise à jour passe alors par pacman.
 
-**Flatpak** : `packaging/flatpak/` (construction décrite en tête du manifeste). Attention : ce
-Flatpak n'isole pas L Katta, qui lance les programmes de la machine (terminal, presse-papiers…).
+**Flatpak** : le fichier `LKatta-*-x86_64.flatpak` d'une release (à partir de 0.3.1), puis
+`flatpak install --user LKatta-*-x86_64.flatpak` et `flatpak run io.github.raantss18.LKatta`.
+Manifeste : `packaging/flatpak/`. Attention : ce Flatpak n'isole pas L Katta, qui lance les
+programmes de la machine (terminal, presse-papiers…) et garde les mêmes réglages que l'AppImage.
 
 Le binaire démarre avec glibc 2.35 ou plus (Ubuntu 22.04, Debian 12, Fedora, Arch…).
 

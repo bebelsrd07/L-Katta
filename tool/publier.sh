@@ -18,6 +18,8 @@ v="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
 [ -z "$(git status --porcelain)" ] || { echo "des changements ne sont pas commités" >&2; exit 1; }
 if git rev-parse "v$v" >/dev/null 2>&1; then echo "l'étiquette v$v existe déjà" >&2; exit 1; fi
 grep -q "^## $v " CHANGELOG.md || { echo "CHANGELOG.md n'a pas d'entrée $v" >&2; exit 1; }
+meta="packaging/flatpak/io.github.raantss18.LKatta.metainfo.xml"
+grep -q "<release version=\"$v\"" "$meta" || { echo "$meta n'a pas de <release version=\"$v\">" >&2; exit 1; }
 
 cargo test --locked
 RUSTFLAGS="-D warnings" cargo build --locked
@@ -35,6 +37,17 @@ cp assets/fonts/OFL-*.txt "$d/fonts/"
   tar czf "lkatta-$v-x86_64-linux.tar.gz" "lkatta-$v-x86_64-linux"
   sha256sum "$(basename "$appimage")" "lkatta-$v-x86_64-linux.tar.gz" > SHA256SUMS
 )
+# Flatpak (paquet .flatpak joint à la version) : SDK freedesktop + rust-stable et
+# org.flatpak.Builder installés (flatpak --user). Sans eux, la version part sans Flatpak.
+flatpak_out=""
+if flatpak info --user org.flatpak.Builder >/dev/null 2>&1; then
+  flatpak run org.flatpak.Builder --force-clean --state-dir=.flatpak-builder --repo=repo-flatpak build-flatpak packaging/flatpak/io.github.raantss18.LKatta.yml >/dev/null
+  flatpak_out="LKatta-$v-x86_64.flatpak"
+  flatpak build-bundle repo-flatpak "dist/$flatpak_out" io.github.raantss18.LKatta
+  (cd dist && sha256sum "$flatpak_out" >> SHA256SUMS)
+else
+  echo "(org.flatpak.Builder absent : pas de paquet Flatpak pour $v)" >&2
+fi
 # Signature : 64 octets Ed25519 sur le contenu exact de SHA256SUMS, en base64.
 openssl pkeyutl -sign -inkey "$cle" -rawin -in dist/SHA256SUMS | base64 -w0 > dist/SHA256SUMS.sig
 echo >> dist/SHA256SUMS.sig
@@ -43,5 +56,5 @@ target/release/lkatta verifier-signature dist/SHA256SUMS dist/SHA256SUMS.sig
 
 git tag "v$v"
 git push origin main "v$v"
-gh release create "v$v" "$appimage" "dist/lkatta-$v-x86_64-linux.tar.gz" dist/SHA256SUMS dist/SHA256SUMS.sig --title "L Katta $v" --notes-file "$notes"
+gh release create "v$v" "$appimage" "dist/lkatta-$v-x86_64-linux.tar.gz" ${flatpak_out:+"dist/$flatpak_out"} dist/SHA256SUMS dist/SHA256SUMS.sig --title "L Katta $v" --notes-file "$notes"
 echo "Publié : v$v (signée)"

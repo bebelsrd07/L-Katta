@@ -120,12 +120,12 @@ fn bureau() -> String {
 pub fn texte() -> String {
     let mut parts = vec![];
     let noyau = cmd("uname", &["-r"]).unwrap_or_default();
-    let hote = lire("/etc/hostname");
+    let hote = lire(&crate::hote::etc("/etc/hostname"));
     let hote = if hote.trim().is_empty() { cmd("uname", &["-n"]).unwrap_or_default() } else { hote.trim().to_string() };
     let modele = [lire("/sys/class/dmi/id/sys_vendor"), lire("/sys/class/dmi/id/product_name")].iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ");
     parts.push(format!(
         "## Système\n- {} (noyau {noyau})\n- Machine : {}{}\n- Bureau : {}",
-        os_release(&lire("/etc/os-release")),
+        os_release(&lire(&crate::hote::etc("/etc/os-release"))),
         if hote.is_empty() { "—".into() } else { hote },
         if modele.is_empty() { String::new() } else { format!(" — {modele}") },
         bureau()

@@ -206,10 +206,12 @@ Une application généraliste qui s'adapte à chaque utilisateur. Ordre recomman
    makepkg ; `tool/aur.sh` les met à la version publiée, `--envoyer` les pousse) ; ✔ manifeste
    Flatpak (packaging/flatpak) : programmes de la machine par `flatpak-spawn --host` (src/hote.rs),
    dossiers de la machine, mise à jour laissée au gestionnaire. ✔ binaire compatible glibc 2.35
-   (src/glibc.rs, `tool/glibc-max.sh` dans publier.sh). Reste : compte AUR et premier envoi
-   (Antsa) ; construire et essayer le Flatpak (SDK 25.08 + rust-stable à télécharger) ;
-   Flathub refuserait sans doute un Flatpak qui lance tout sur la machine : paquet .flatpak
-   joint aux versions à la place.
+   (src/glibc.rs, `tool/glibc-max.sh` dans publier.sh). ✔ Flatpak construit (runtime 26.08,
+   Rust 1.98) et essayé dans un KWin virtuel : maki affiché par Wayland, fenêtre active et plein
+   écran vus par le script KWin (qdbus de la machine), `dire`, `etat`, `quitter` ; paquet
+   `.flatpak` (5 Mo) joint à chaque version par publier.sh, dans le SHA256SUMS signé.
+   Reste : compte AUR et premier envoi (Antsa) ; Flathub refuserait sans doute un Flatpak qui
+   lance tout sur la machine.
 
 ## Ensuite (0.2.x)
 

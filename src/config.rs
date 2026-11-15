@@ -201,7 +201,7 @@ impl Default for Config {
 fn default_prenom() -> String {
     // Champ GECOS de /etc/passwd, sinon $USER.
     let user = std::env::var("USER").unwrap_or_default();
-    if let Ok(passwd) = std::fs::read_to_string("/etc/passwd") {
+    if let Ok(passwd) = std::fs::read_to_string(crate::hote::etc("/etc/passwd")) {
         for line in passwd.lines() {
             let f: Vec<&str> = line.split(':').collect();
             if f.len() > 4 && f[0] == user {

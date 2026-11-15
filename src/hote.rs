@@ -43,6 +43,18 @@ pub fn commande_env(prog: impl AsRef<OsStr>, env: &[(&str, &OsStr)]) -> Command 
     c
 }
 
+/// Fichier de /etc de la machine : dans le Flatpak, /etc est celui du bac à sable ; celui de
+/// la machine est dans /run/host/etc (accès host-etc) et os-release dans /run/host.
+pub fn etc(chemin: &str) -> String {
+    if !flatpak() {
+        return chemin.to_string();
+    }
+    match chemin {
+        "/etc/os-release" => "/run/host/os-release".to_string(),
+        c => c.strip_prefix("/etc/").map(|r| format!("/run/host/etc/{r}")).unwrap_or_else(|| c.to_string()),
+    }
+}
+
 /// Le programme existe-t-il sur la machine (dans son PATH) ?
 pub fn existe(prog: &str) -> bool {
     if !flatpak() {
@@ -113,5 +125,6 @@ mod tests {
         assert!(c.get_envs().any(|(k, v)| k == "A" && v == Some(std::ffi::OsStr::new("1"))));
         assert!(super::existe("sh"));
         assert!(super::lanceur_bureau().contains("APPIMAGELAUNCHER_DISABLE=1"));
+        assert_eq!(super::etc("/etc/os-release"), "/etc/os-release");
     }
 }

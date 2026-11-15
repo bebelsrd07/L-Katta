@@ -8,8 +8,9 @@ Règle : chaque chiffre va de 0 à 9 (0.0.9 → 0.1.0, 0.9.9 → 1.0.0).
   démarraient que sur les distributions les plus récentes (Arch). Ils démarrent maintenant avec
   glibc 2.35 ou plus (Ubuntu 22.04, Debian 12, Fedora…) ; chaque publication le vérifie.
 - **Arch Linux** : paquets AUR `lkatta-bin` (binaire de la version) et `lkatta` (compilé).
-- **Flatpak** : manifeste `io.github.raantss18.LKatta` ; les programmes de la machine passent par
-  `flatpak-spawn --host`, mêmes dossiers de réglages que l'AppImage.
+- **Flatpak** : paquet `.flatpak` joint à la version (`flatpak install --user LKatta-…flatpak`) ;
+  les programmes de la machine passent par `flatpak-spawn --host`, mêmes dossiers de réglages
+  que l'AppImage, nom du système lu sur la machine.
 - Installé par un gestionnaire de paquets (pacman, Flatpak) : L Katta ne se remplace plus lui-même,
   il signale la nouvelle version.
 
