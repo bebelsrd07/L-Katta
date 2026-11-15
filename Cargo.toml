@@ -1,6 +1,6 @@
 [package]
 name = "lkatta"
-version = "0.2.7"
+version = "0.2.8"
 edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0"
@@ -38,7 +38,8 @@ rusqlite = { version = "0.42.0", features = ["bundled"] }
 ed25519-compact = { version = "2.6.1", default-features = false, features = ["std"] }
 futures-lite = "2"
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
-x11rb = { version = "0.14", features = ["shape", "randr"] }
+x11rb = { version = "0.14", features = ["shape", "randr", "cursor"] }
+xkbcommon = { version = "0.8", default-features = false }
 
 [profile.dev.package."*"]
 opt-level = 2

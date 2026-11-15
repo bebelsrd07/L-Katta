@@ -319,7 +319,7 @@ fn viser(f: &Fenetre) -> Result<(), String> {
 /// soit la disposition du clavier), puis le presse-papiers d'avant est remis.
 pub fn taper(f: &Fenetre, texte: &str) -> Result<String, String> {
     viser(f)?;
-    let avant = Command::new("wl-paste").args(["--no-newline"]).stderr(Stdio::null()).output().ok().filter(|o| o.status.success()).map(|o| o.stdout);
+    let avant = crate::clipboard::coller();
     crate::clipboard::copy(texte).map_err(|e| e.to_string())?;
     std::thread::sleep(Duration::from_millis(120));
     let terminal = ["konsole", "terminal", "kitty", "alacritty", "wezterm", "foot", "yakuake"].iter().any(|t| f.classe.to_lowercase().contains(t));

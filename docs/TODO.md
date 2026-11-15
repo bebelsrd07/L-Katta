@@ -172,9 +172,15 @@ Une application généraliste qui s'adapte à chaque utilisateur. Ordre recomman
    - c. ✔ affichage X11 du vrai maki (src/mascot/x11.rs) : fenêtre ARGB au-dessus de tout,
      zones cliquables (SHAPE), écrans (RandR), souris et clavier traduits vers la même logique,
      bulle qui prend le clavier ; vérifié dans un KWin virtuel avec Xwayland (maki, accueil et
-     bulles dessinés). Reste : essai sur un vrai bureau X11 (clics et frappe : Xwayland refuse
-     les événements simulés), touches mortes et composition (accents tapés), fenêtre active
-     (_NET_ACTIVE_WINDOW), zone utile (_NET_WORKAREA), glisser-déposer (XDND) ;
+     bulles dessinés) ;
+   - e. ✔ bureau X11 (0.2.8) : clavier par libxkbcommon (vraie disposition, AltGr, touches
+     mortes et touche Compose), fenêtres par les conventions EWMH (fenêtre active, plein écran,
+     position pour grimper dessus, liste ; activer, réduire, agrandir, fermer), zone utile hors
+     panneaux (_NET_WORKAREA), curseurs du thème, presse-papiers par xclip ou xsel. Vérifié :
+     disposition fr (^ puis e → ê, AltGr+e → €) en test, fenêtre active et plein écran dans un
+     KWin virtuel avec Xwayland. Reste : essai sur un vrai bureau X11 (clics et frappe :
+     Xwayland refuse les événements simulés), glisser-déposer (XDND), historique du
+     presse-papiers sous X11, écran branché ou débranché en cours de route (RandR) ;
    - d. ✔ choix automatique : Wayland avec layer-shell, sinon X11 (`DISPLAY`) — GNOME compris,
      par Xwayland ; `LKATTA_AFFICHAGE=x11` force X11 pour les essais.
 4. **GNOME (Wayland)** : extension GNOME Shell qui accueille le maki (GNOME refuse layer-shell).

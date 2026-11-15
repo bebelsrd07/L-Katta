@@ -40,13 +40,47 @@ pub fn push(list: &mut Vec<Entree>, texte: String, max: usize) {
     list.truncate(max.max(1));
 }
 
-/// Place du texte dans le presse-papiers.
+/// Session Wayland avec wl-clipboard ; sinon X11 (xclip ou xsel).
+fn wayland() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some() && crate::config::which("wl-copy")
+}
+
+/// Place du texte dans le presse-papiers (wl-copy, sinon xclip ou xsel sous X11).
 pub fn copy(texte: &str) -> std::io::Result<()> {
     use std::io::Write;
-    let mut child = Command::new("wl-copy").stdin(Stdio::piped()).spawn()?;
+    let mut cmd = if wayland() {
+        Command::new("wl-copy")
+    } else if crate::config::which("xclip") {
+        let mut c = Command::new("xclip");
+        c.args(["-selection", "clipboard"]);
+        c
+    } else {
+        let mut c = Command::new("xsel");
+        c.arg("-ib");
+        c
+    };
+    let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
     child.stdin.take().expect("stdin").write_all(texte.as_bytes())?;
     child.wait()?;
     Ok(())
+}
+
+/// Texte du presse-papiers (wl-paste, sinon xclip ou xsel sous X11).
+pub fn coller() -> Option<Vec<u8>> {
+    let mut cmd = if wayland() {
+        let mut c = Command::new("wl-paste");
+        c.args(["--no-newline", "--type", "text"]);
+        c
+    } else if crate::config::which("xclip") {
+        let mut c = Command::new("xclip");
+        c.args(["-selection", "clipboard", "-o"]);
+        c
+    } else {
+        let mut c = Command::new("xsel");
+        c.arg("-ob");
+        c
+    };
+    cmd.stderr(Stdio::null()).output().ok().filter(|o| o.status.success()).map(|o| o.stdout)
 }
 
 const WATCH_SCRIPT: &str = "if wl-paste -l 2>/dev/null | grep -q passwordManagerHint; then cat >/dev/null; echo SECRET; \

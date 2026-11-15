@@ -60,3 +60,8 @@
   affichage X11 (`App.x11`). Essai X11 du vrai maki : script passé à `kwin_wayland --virtual
   --xwayland` qui lance lkatta avec LKATTA_AFFICHAGE=x11, XDG_* de test et
   LKATTA_X11_CAPTURE=image.png (dernière image envoyée).
+- Essais dans un KWin virtuel : XDG_RUNTIME_DIR COURT (`mktemp -d /tmp/lkx.XXXX` ; un chemin long
+  empêche le socket Wayland, kwin reste muet) et lkatta lancé par `dbus-run-session --` : sinon
+  l'instance d'essai parle au vrai KWin et au vrai bus de session de l'utilisateur. X11 sans
+  clics simulés : fenêtres de test par xterm (`-fullscreen` pour le plein écran), LKATTA_DEBUG=1
+  affiche « fenêtre : … ». Clavier X11 : `Clavier::depuis_noms` (libxkbcommon) testable sans X.

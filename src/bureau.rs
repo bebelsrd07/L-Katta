@@ -113,7 +113,10 @@ impl Service {
 pub fn demarrer(tx: impl Fn(Msg) + Send + Sync + 'static) {
     std::thread::spawn(move || {
         let r: zbus::Result<()> = zbus::block_on(async move {
+            // Sans « remplacer » : un deuxième L Katta (essai, autre affichage) ne doit pas
+            // prendre le nom au maki en marche, qui ne verrait plus la fenêtre active.
             let _conn = zbus::connection::Builder::session()
+                .replace_existing_names(false)
                 .name("org.lkatta.Maki")
                 .serve_at("/Maki", Service { tx: Box::new(tx) })
                 .build()

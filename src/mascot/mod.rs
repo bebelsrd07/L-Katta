@@ -95,6 +95,8 @@ struct Screen {
     geom: Option<(f32, f32, f32, f32)>,
     /// Nom de l'écran (X11 ; sous Wayland, lu dans OutputState).
     nom: String,
+    /// Coin de la zone utile dans l'écran (X11 : panneaux en haut ou à gauche ; Wayland : 0).
+    decalage: (f32, f32),
 }
 
 fn make_main(shell: &LayerShell, comp: &CompositorState, qh: &QueueHandle<App>, out: Option<&wl_output::WlOutput>, sw: u32, sh: u32, k: KeyboardInteractivity) -> LayerSurface {
@@ -487,6 +489,14 @@ impl App {
         self.current = Some(o);
     }
 
+    /// Coin haut-gauche (coordonnées globales) de la zone utile de l'écran courant.
+    fn coin_utile(&self) -> (f32, f32) {
+        let Some(c) = self.current.as_ref() else { return (0.0, 0.0) };
+        let g = self.geom(c).unwrap_or((0.0, 0.0, 0.0, 0.0));
+        let d = self.screens.iter().find(|s| &s.out == c).map(|s| s.decalage).unwrap_or((0.0, 0.0));
+        (g.0 + d.0, g.1 + d.1)
+    }
+
     fn area(&self) -> (f32, f32) {
         let cur = self.current.as_ref().and_then(|c| self.screens.iter().find(|s| &s.out == c)).and_then(|s| s.area);
         cur.or(self.area).unwrap_or_else(|| {
@@ -538,7 +548,8 @@ impl App {
         if !f.ecran.is_empty() && Some(f.ecran.clone()) != self.current_name() {
             return None;
         }
-        let g = self.current.as_ref().and_then(|c| self.geom(c))?;
+        self.current.as_ref().and_then(|c| self.geom(c))?;
+        let g = self.coin_utile();
         let (w, h) = self.area();
         let s = self.s;
         let x0 = (f.rect.0 - g.0).max(0.0);
@@ -1212,9 +1223,9 @@ impl App {
                 wl.layer.set_margin(origin.1, 0, 0, origin.0);
             } else {
                 // X11 : position absolue = coin de l'écran courant + origine dans l'écran.
-                let g = self.current.as_ref().and_then(|c| self.geom(c)).unwrap_or((0.0, 0.0, 0.0, 0.0));
+                let (cx, cy) = self.coin_utile();
                 if let Some(x) = self.x11.as_mut() {
-                    x.deplacer(g.0 as i32 + origin.0, g.1 as i32 + origin.1);
+                    x.deplacer(cx as i32 + origin.0, cy as i32 + origin.1);
                 }
             }
         }
@@ -1405,6 +1416,9 @@ impl App {
                     let _ = p.set_cursor(&wl.conn, c);
                 }
             }
+            if let Some(x) = self.x11.as_mut() {
+                x.curseur(c.name());
+            }
         }
     }
 
@@ -1537,8 +1551,8 @@ impl App {
                 Keysym::Return | Keysym::KP_Enter => self.chat.field_enter(),
                 Keysym::BackSpace => self.chat.field_backspace(),
                 _ if self.ctrl && matches!(ev.keysym, Keysym::v | Keysym::V) => {
-                    if let Ok(o) = std::process::Command::new("wl-paste").args(["--no-newline", "--type", "text"]).output() {
-                        self.chat.field_input(&String::from_utf8_lossy(&o.stdout));
+                    if let Some(o) = crate::clipboard::coller() {
+                        self.chat.field_input(&String::from_utf8_lossy(&o));
                     }
                 }
                 _ => {
@@ -1568,8 +1582,8 @@ impl App {
             Keysym::Page_Up | Keysym::Up => self.chat.scroll += 3,
             Keysym::Page_Down | Keysym::Down => self.chat.scroll = self.chat.scroll.saturating_sub(3),
             _ if self.ctrl && matches!(ev.keysym, Keysym::v | Keysym::V) => {
-                if let Ok(o) = std::process::Command::new("wl-paste").args(["--no-newline", "--type", "text"]).output() {
-                    self.chat.input.inserer(&String::from_utf8_lossy(&o.stdout));
+                if let Some(o) = crate::clipboard::coller() {
+                    self.chat.input.inserer(&String::from_utf8_lossy(&o));
                 }
             }
             _ if self.ctrl && matches!(ev.keysym, Keysym::a | Keysym::A) => self.chat.input.tout_selectionner(),
@@ -1663,7 +1677,7 @@ impl OutputHandler for App {
             probe.wl_surface().set_input_region(Some(r.wl_region()));
         }
         probe.commit();
-        self.screens.push(Screen { out: Sortie::Wl(o), probe: Some(probe), area: None, geom: None, nom: String::new() });
+        self.screens.push(Screen { out: Sortie::Wl(o), probe: Some(probe), area: None, geom: None, nom: String::new(), decalage: (0.0, 0.0) });
     }
     fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
     fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, o: wl_output::WlOutput) {
@@ -2022,6 +2036,12 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for App {
 impl App {
     /// Actions demandées par les outils (autres fils) sur les fenêtres du protocole standard.
     fn actions_fenetres(&mut self) {
+        if let Some(x) = self.x11.as_ref() {
+            for (id, a) in crate::toplevels::prendre_actions() {
+                x.action(id, a);
+            }
+            return;
+        }
         let Some(wl) = self.wl.as_ref() else { return };
         for (id, a) in crate::toplevels::prendre_actions() {
             let Some((h, f, _)) = wl.toplevels.get(&id) else { continue };

@@ -2,6 +2,16 @@
 
 Règle : chaque chiffre va de 0 à 9 (0.0.9 → 0.1.0, 0.9.9 → 1.0.0).
 
+## 0.2.8 — en cours
+
+- **Bureaux X11 complets** : les accents se tapent comme ailleurs (touches mortes ^ ¨ `,
+  AltGr, touche Compose, ta disposition de clavier) ; le maki voit la fenêtre active (il se
+  cache devant une vidéo en plein écran, se tait en visio, grimpe sur les fenêtres) et peut
+  lister, mettre au premier plan, réduire, agrandir et fermer les fenêtres ; il reste hors des
+  panneaux ; le pointeur prend la forme du thème ; copier-coller par xclip ou xsel.
+- Correction : un deuxième L Katta lancé à côté (essai, autre affichage) ne prend plus au
+  maki en marche son lien avec le bureau (il ne voyait plus la fenêtre active).
+
 ## 0.2.7 — 2026-11-15
 
 - **L Katta sur les bureaux X11** (XFCE, Cinnamon, MATE, i3, KDE en X11), et sur GNOME par
