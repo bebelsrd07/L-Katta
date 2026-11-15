@@ -85,10 +85,33 @@ index, agenda, web), puis `cargo audit` (base RustSec, 228 dépendances de `Carg
   le gestionnaire de paquets garde la main sur /usr/bin et /app.
 - **AUR** : `lkatta-bin` vérifie l'archive par son SHA-256, pris dans le SHA256SUMS signé.
 
+## Autonomie du côté Code (src/autonomie.rs)
+
+Un accord, demandé une fois par dossier de projet et valable jusqu'à l'arrêt de L Katta, remplace
+la question posée à chaque fichier et à chaque commande. Ce que le code garantit, quel que soit
+le modèle :
+
+- **Jamais pour tout le disque** : ni `/`, ni le dossier personnel, ni un de ses parents.
+  `autonomie = false` ou `confirmer_tout = true` (règles de la machine ou de l'utilisateur)
+  suppriment l'accord.
+- **Fichiers** : sans question seulement dans le dossier, liens symboliques résolus ; jamais dans
+  `.git` ni sur un fichier de secrets (`.env`, `*.pem`, `*.key`, `id_*`…). Un fichier remplacé
+  est d'abord copié dans `sauvegardes/` (300 dernières copies).
+- **Commandes** : sans question seulement dans un bac à sable bubblewrap : disque en lecture
+  seule sauf le projet et `~/.cache`, pas de réseau, pas de bus de session ni d'agent SSH,
+  dossiers interdits remplacés par du vide. Sans bubblewrap, chaque commande est demandée.
+- **Toujours demandé** (`autonomie::gardee`) : suppression et écrasement sans retour, Git qui
+  jette ou qui sort (`reset`, `clean`, `checkout`, `push`, `pull`…), réseau, paquets, services,
+  autres processus, publication ; et toute commande que le modèle veut lancer hors du bac
+  (`hors_bac`).
+- **Limite connue** : dans le projet, une commande du bac peut écraser un fichier (`mv`, `>`,
+  `sed -i`) sans copie de sauvegarde ; la liste des commandes gardées est une liste de noms, le
+  bac est la vraie barrière pour ce qui est hors du projet.
+
 ## Non corrigé, à décider
 
-- **Bac à sable.** Les commandes acceptées par l'utilisateur tournent avec ses droits. Un bac à
-  sable (bubblewrap, dossiers interdits invisibles) fermerait ce qui reste d'astuces de shell.
+- **Bac à sable hors accord.** Les commandes acceptées une par une par l'utilisateur tournent
+  avec ses droits, hors du bac.
 - **Presse-papiers et notifications** : le modèle peut les lire sans demande d'accord (les mots de
   passe signalés par les gestionnaires sont déjà écartés).
 

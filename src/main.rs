@@ -4,6 +4,7 @@
 mod lang;
 
 mod apropos;
+mod autonomie;
 mod brain;
 mod glibc;
 mod hote;

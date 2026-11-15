@@ -47,6 +47,12 @@ pub fn adopter(n: u64) {
     MIENNE.with(|m| m.set(n));
 }
 
+/// Numéro de la demande de ce fil (ou de la demande en cours).
+pub fn demande() -> u64 {
+    let n = MIENNE.with(|m| m.get());
+    if n == 0 { DEMANDE.load(Ordering::Relaxed) } else { n }
+}
+
 /// Arrête la demande en cours.
 pub fn arreter() {
     ARRETEE.store(DEMANDE.load(Ordering::Relaxed), Ordering::Relaxed);

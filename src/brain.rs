@@ -79,7 +79,9 @@ Tu travailles en autonomie sur la tâche demandée, jusqu'au bout :\n\
 2. Exécute-le avec tes outils, étape par étape, sans attendre qu'on te relance ; adapte le plan si un résultat le demande.\n\
 3. Vérifie le résultat (relis le fichier, l'état, la sortie de la commande).\n\
 4. Termine par un compte rendu : ce qui est fait, ce qui a échoué, ce qui reste à faire.\n\
-Les règles strictes et les confirmations restent les mêmes : n'essaie jamais de les contourner.";
+Les règles strictes et les confirmations restent les mêmes : n'essaie jamais de les contourner. \
+Dans le dossier du projet, l'utilisateur peut t'avoir donné un accord unique : tu y écris alors sans question, et tes commandes tournent \
+dans un bac à sable (sans Internet, écriture dans le projet seulement). Supprimer, publier, installer ou sortir du projet reste demandé.";
 
 impl Brain {
     pub fn new(cfg: Config) -> Self {

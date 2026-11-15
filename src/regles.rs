@@ -19,6 +19,9 @@ use crate::paths;
 pub struct Regles {
     /// Demander confirmation pour TOUTE action, même en lecture seule.
     pub confirmer_tout: bool,
+    /// Côté Code : un seul accord par dossier de projet, puis plus de question pour ce qui y
+    /// reste et peut se défaire (src/autonomie.rs). `false` : tout est demandé, comme avant.
+    pub autonomie: bool,
     /// Dossiers et fichiers jamais lus, listés, cherchés ni modifiés.
     pub dossiers_interdits: Vec<String>,
     /// Commandes refusées (mot de début ou morceau de commande, ex. « rm », « git push »).
@@ -43,6 +46,7 @@ impl Default for Regles {
     fn default() -> Self {
         Self {
             confirmer_tout: false,
+            autonomie: true,
             dossiers_interdits: vec![
                 "~/.ssh".into(),
                 "~/.gnupg".into(),
@@ -117,6 +121,7 @@ pub fn merge(sys: &Regles, user: &Regles) -> Regles {
     };
     Regles {
         confirmer_tout: sys.confirmer_tout || user.confirmer_tout,
+        autonomie: sys.autonomie && user.autonomie,
         dossiers_interdits: union(&sys.dossiers_interdits, &user.dossiers_interdits),
         commandes_interdites: union(&sys.commandes_interdites, &user.commandes_interdites),
         outils_interdits: union(&sys.outils_interdits, &user.outils_interdits),
@@ -178,6 +183,8 @@ pub fn prompt_block(prenom: &str) -> String {
     }
     if r.confirmer_tout {
         out.push_str("- Toute action demande une confirmation.\n");
+    } else if !r.autonomie {
+        out.push_str("- Côté Code : chaque fichier écrit et chaque commande sont demandés (autonomie coupée).\n");
     }
     out
 }
@@ -264,6 +271,11 @@ fn glob_prefix(pattern: &Path, path: &Path) -> bool {
 }
 
 impl Regles {
+    /// Chemins interdits, développés (pour les masquer dans le bac à sable).
+    pub fn chemins_interdits(&self) -> Vec<PathBuf> {
+        self.forbidden_paths()
+    }
+
     fn forbidden_paths(&self) -> Vec<PathBuf> {
         // Les « ~ » se lisent depuis le dossier personnel, jamais depuis le dossier de travail.
         let home = paths::home_dir();

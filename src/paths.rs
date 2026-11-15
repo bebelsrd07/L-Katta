@@ -116,6 +116,11 @@ pub fn set_travail(d: Option<PathBuf>) {
     TRAVAIL.with(|t| *t.borrow_mut() = d.filter(|p| p.is_dir()));
 }
 
+/// Dossier du projet de ce fil (côté Code), s'il y en a un.
+pub fn projet() -> Option<PathBuf> {
+    TRAVAIL.with(|t| t.borrow().clone())
+}
+
 /// Dossier d'où partent les commandes et les chemins relatifs.
 pub fn travail() -> PathBuf {
     TRAVAIL.with(|t| t.borrow().clone()).unwrap_or_else(home)

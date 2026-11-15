@@ -21,7 +21,7 @@
   AppImageLauncher ouvre une fenêtre sur l'écran de l'utilisateur.
 - Ne pas tester en changeant de bureau virtuel ni en injectant des touches : l'utilisateur
   travaille sur cette machine pendant les essais.
-- Versions : chaque chiffre 0..9 (0.0.9 → 0.1.0). Feuille de route : docs/TODO.md.
+- Versions : chaque chiffre 0..9 (0.0.9 → 0.1.0), toujours par `tool/version.py --bump`. Feuille de route : docs/TODO.md.
 - `lkatta apercu fichier.png` dessine les poses.
 - Côtés et fils (src/fils.rs) : côté Discussion (sans outils d'écriture, `brain::OUTILS_CODE`)
   et côté Code (agent, dossier de projet via `paths::set_travail`). Un fichier par fil dans
@@ -80,6 +80,10 @@
   `flatpak install --user` du paquet puis `flatpak run --env=HOST_XDG_CONFIG_HOME=…` (dossiers
   d'essai sous ~ : /tmp n'est pas vu) ; désinstaller ensuite. `flatpak build` ne suffit pas
   (ni WAYLAND_DISPLAY ni $XDG_RUNTIME_DIR/app partagé).
+- Autonomie du côté Code : src/autonomie.rs (un accord par dossier de projet, en mémoire ; fichiers
+  libres dans le dossier ; commandes libres dans le bac bubblewrap sans réseau ; `gardee()` =
+  toujours demandé). Règle `autonomie` dans regles.toml. Ne jamais élargir l'accord au dossier
+  personnel ni laisser une commande libre hors du bac.
 - GNOME : extension pont dans assets/gnome/<uuid>/ (embarquée par include_str!, src/gnome.rs),
   ES modules GNOME 45+. Elle envoie la fenêtre active à org.lkatta.Maki (comme le script KWin)
   et offre /org/lkatta/Gnome chez org.gnome.Shell. Toute chaîne nouvelle passe par t!() ET

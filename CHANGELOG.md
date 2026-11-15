@@ -2,6 +2,19 @@
 
 Règle : chaque chiffre va de 0 à 9 (0.0.9 → 0.1.0, 0.9.9 → 1.0.0).
 
+## 0.3.2 — 2026-11-15
+
+- **Côté Code : un seul accord par dossier.** Au premier fichier écrit ou à la première
+  commande dans un projet, L Katta demande une fois s'il peut y travailler librement ; ensuite
+  il ne demande plus rien pour ce qui reste dans ce dossier et ses sous-dossiers, quel que soit
+  le modèle qui répond. Les commandes tournent dans un bac à sable (bubblewrap) : pas d'Internet,
+  écriture dans le projet seulement, dossiers interdits masqués. L'ancienne version d'un fichier
+  remplacé est gardée dans `~/.local/share/lkatta/sauvegardes/`.
+- **Toujours demandé** : supprimer ou écraser sans retour (`rm`, `git reset --hard`, `git clean`…),
+  publier ou sortir de la machine (`git push`, `curl`, `ssh`…), paquets, services, administrateur,
+  tout ce qui est hors du projet. `autonomie = false` dans `regles.toml` remet une question
+  par action.
+
 ## 0.3.1 — 2026-11-15
 
 - **Correction importante** : le binaire et l'AppImage exigeaient glibc 2.43, donc ne

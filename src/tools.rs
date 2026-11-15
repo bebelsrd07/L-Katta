@@ -97,10 +97,10 @@ pub fn schemas() -> Value {
              json!({"texte": s("texte recherché"), "dossier": s("défaut ~/Documents")}), &["texte"]),
         tool("lister_dossier", "Liste le contenu d'un dossier (taille, date).", json!({"chemin": s("dossier")}), &["chemin"]),
         tool("lire_fichier", "Lit un fichier texte (début du fichier).", json!({"chemin": s("chemin du fichier")}), &["chemin"]),
-        tool("creer_fichier", "Crée (ou remplace si ecraser) un fichier texte : notes, scripts, Markdown, CSV, LaTeX… Demande confirmation.",
+        tool("creer_fichier", "Crée (ou remplace si ecraser) un fichier texte : notes, scripts, Markdown, CSV, LaTeX… Demande confirmation, sauf dans le dossier du projet quand l'utilisateur a donné son accord.",
              json!({"chemin": s("chemin complet"), "contenu": s("contenu"), "ecraser": {"type": "boolean"}}), &["chemin", "contenu"]),
-        tool("commande", "Exécute une commande shell. Lecture seule : directe ; sinon l'utilisateur confirme. Jamais de sudo.",
-             json!({"commande": s("commande bash")}), &["commande"]),
+        tool("commande", "Exécute une commande shell. Lecture seule : directe ; sinon l'utilisateur confirme. Avec son accord sur le dossier du projet, elle tourne sans question dans un bac à sable (sans Internet, écriture dans le projet seulement). Jamais de sudo.",
+             json!({"commande": s("commande bash"), "hors_bac": {"type": "boolean", "description": "true : hors du bac à sable (Internet, écriture ailleurs) ; l'utilisateur confirme"}}), &["commande"]),
         tool("ouvrir", "Ouvre un fichier, un dossier ou une adresse web avec l'application par défaut.", json!({"cible": s("chemin ou URL")}), &["cible"]),
         tool("recherche_web", "Recherche sur Internet (titres, liens, extraits).", json!({"requete": s("requête")}), &["requete"]),
         tool("lire_page_web", "Lit le texte d'une page web.", json!({"url": s("adresse http(s)")}), &["url"]),
@@ -259,7 +259,7 @@ pub fn execute(name: &str, a: &Value, cfg: &Config, host: &mut dyn Host) -> Stri
         "lister_dossier" => list_dir(arg(a, "chemin")),
         "lire_fichier" => read_file(arg(a, "chemin")).map(external),
         "creer_fichier" => create_file(arg(a, "chemin"), arg(a, "contenu"), a.get("ecraser").and_then(Value::as_bool).unwrap_or(false), host),
-        "commande" => shell(arg(a, "commande"), host, regles.confirmer_tout).map(external),
+        "commande" => shell(arg(a, "commande"), host, regles.confirmer_tout, a.get("hors_bac").and_then(Value::as_bool).unwrap_or(false)).map(external),
         "ouvrir" => {
             let c = arg(a, "cible");
             if c.starts_with("http") && web::url_bavarde(c) && !host.confirm(&t!("Ouvrir cette adresse ? Elle contient beaucoup de données.\n{}", montrer(c, 600))) {
@@ -505,12 +505,16 @@ pub fn execute(name: &str, a: &Value, cfg: &Config, host: &mut dyn Host) -> Stri
 // --- implémentations -------------------------------------------------------
 
 fn run_capture(cmd: &str, timeout: Duration) -> Result<(i32, String), String> {
-    let mut child = crate::hote::commande("bash")
-        .args(["-c", cmd])
+    let mut c = crate::hote::commande("bash");
+    c.args(["-c", cmd]).current_dir(paths::travail());
+    run_capture_avec(c, timeout)
+}
+
+fn run_capture_avec(mut c: std::process::Command, timeout: Duration) -> Result<(i32, String), String> {
+    let mut child = c
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .current_dir(paths::travail())
         .spawn()
         .map_err(|e| e.to_string())?;
     let mut stdout = child.stdout.take().unwrap();
@@ -692,14 +696,21 @@ fn create_file(chemin: &str, contenu: &str, ecraser: bool, host: &mut dyn Host) 
     let (chemin, n) = (p.display(), contenu.lines().count());
     let q = if exists { t!("Remplacer le fichier {} ({} lignes) ?", chemin, n) } else { t!("Créer le fichier {} ({} lignes) ?", chemin, n) };
     let q = format!("{q}\n\n{}", montrer(contenu, 2500));
-    if !host.confirm(&q) {
+    // Dans le projet, avec l'accord donné une fois : pas de question, ancienne version gardée.
+    let regles = crate::regles::load();
+    let libre = crate::autonomie::accord(&regles, host).is_some_and(|d| crate::autonomie::fichier_couvert(&d, &p));
+    if !libre && !host.confirm(&q) {
         return Ok("Refusé par l'utilisateur.".into());
     }
+    let garde = if exists { crate::autonomie::sauvegarder(&p) } else { None };
     if let Some(d) = p.parent() {
         std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
     }
     std::fs::write(&p, contenu).map_err(|e| e.to_string())?;
-    Ok(format!("Fichier écrit : {}", p.display()))
+    Ok(match garde {
+        Some(g) => format!("Fichier écrit : {} (ancienne version gardée : {})", p.display(), g.display()),
+        None => format!("Fichier écrit : {}", p.display()),
+    })
 }
 
 /// Programmes qui ne font que lire. Aucun ne peut lancer un autre programme ni écrire un
@@ -831,7 +842,7 @@ fn chemin_interdit_dans(cmd: &str, regles: &crate::regles::Regles) -> Option<Str
     None
 }
 
-fn shell(cmd: &str, host: &mut dyn Host, confirm_all: bool) -> Result<String, String> {
+fn shell(cmd: &str, host: &mut dyn Host, confirm_all: bool, hors_bac: bool) -> Result<String, String> {
     if cmd.trim().is_empty() {
         return Err("commande vide".into());
     }
@@ -847,6 +858,22 @@ fn shell(cmd: &str, host: &mut dyn Host, confirm_all: bool) -> Result<String, St
     let regles = crate::regles::load();
     if let Some(c) = chemin_interdit_dans(cmd, &regles) {
         return Ok(format!("REFUSÉ : {c} est un emplacement interdit par les règles strictes"));
+    }
+    // Avec l'accord sur le projet : sans question, dans le bac à sable (src/autonomie.rs).
+    let mut bac = None;
+    if !is_read_only(cmd) && !confirm_all && !hors_bac && !crate::autonomie::gardee(cmd) && crate::autonomie::bac_disponible() {
+        bac = crate::autonomie::accord(&regles, host);
+    }
+    if let Some(d) = &bac {
+        let mut c = crate::hote::commande("bwrap");
+        c.args(crate::autonomie::bac_arguments(d, &regles)).args(["bash", "-c", cmd]);
+        let (code, out) = run_capture_avec(c, Duration::from_secs(120))?;
+        let mut res = format!("[code {code}]\n{out}");
+        if code != 0 {
+            res.push('\n');
+            res.push_str(crate::autonomie::NOTE_BAC);
+        }
+        return Ok(res);
     }
     if !is_read_only(cmd) || confirm_all {
         let q = if crate::sante::irreversible(cmd) { t!("Exécuter cette commande ? ⚠ irréversible\n$ {}", cmd) } else { t!("Exécuter cette commande ?\n$ {}", cmd) };
@@ -934,6 +961,50 @@ pub fn notify(titre: &str, texte: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_agreement_then_free_inside_the_project() {
+        struct H(Vec<String>);
+        impl Host for H {
+            fn confirm(&mut self, q: &str) -> bool {
+                self.0.push(q.to_string());
+                true
+            }
+            fn event(&mut self, _: Event) {}
+        }
+        if crate::regles::load().confirmer_tout || !crate::regles::load().autonomie {
+            return;
+        }
+        let base = std::env::temp_dir().join(format!("lkatta-accord-{}", std::process::id()));
+        let projet = base.join("projet");
+        std::fs::create_dir_all(&projet).unwrap();
+        paths::set_travail(Some(projet.clone()));
+        let mut h = H(vec![]);
+        let ch = |p: &Path| p.to_string_lossy().into_owned();
+        // Première écriture : la question de l'accord, et elle seule.
+        assert!(create_file(&ch(&projet.join("a.txt")), "un", false, &mut h).unwrap().starts_with("Fichier écrit"));
+        assert_eq!(h.0.len(), 1, "{:?}", h.0);
+        assert!(h.0[0].contains("projet"));
+        // Ensuite : plus rien dans le dossier et ses sous-dossiers.
+        create_file(&ch(&projet.join("sous/dossier/b.txt")), "deux", false, &mut h).unwrap();
+        assert_eq!(h.0.len(), 1);
+        // Hors du dossier : toujours demandé.
+        create_file(&ch(&base.join("dehors.txt")), "trois", false, &mut h).unwrap();
+        assert_eq!(h.0.len(), 2);
+        if crate::autonomie::bac_disponible() {
+            let r = shell("echo quatre > c.txt && cat c.txt", &mut h, false, false).unwrap();
+            assert!(r.contains("[code 0]") && r.contains("quatre"), "{r}");
+            assert_eq!(h.0.len(), 2);
+            assert!(projet.join("c.txt").exists());
+            // Supprimer reste demandé, et demander à sortir du bac aussi.
+            shell("rm c.txt", &mut h, false, false).unwrap();
+            assert_eq!(h.0.len(), 3);
+            shell("touch d.txt", &mut h, false, true).unwrap();
+            assert_eq!(h.0.len(), 4);
+        }
+        paths::set_travail(None);
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn read_only_detection() {
