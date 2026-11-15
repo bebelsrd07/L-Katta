@@ -30,6 +30,14 @@ gpg --list-secret-keys "$empreinte" >/dev/null 2>&1 || { echo "la clé privée $
 # Signe la version et le sommaire ; ne garde que la dernière version de chaque branche.
 flatpak build-sign "$depot" --gpg-sign="$empreinte"
 flatpak build-update-repo "$depot" --gpg-sign="$empreinte" --title="L Katta" --default-branch=master --prune --prune-depth=0 >/dev/null
+# Les branches appstream écrites par flatpak-builder (sans clé) ne sont pas re-signées par
+# build-update-repo quand leur contenu n'a pas changé : sans signature, `flatpak update` affiche
+# une erreur et les logithèques ne voient pas la fiche de l'app (cas de la 0.3.2).
+for ref in $(ostree refs --repo="$depot" | grep '^appstream'); do
+  ostree show --repo="$depot" "$ref" 2>/dev/null | grep -q '^Found [1-9][0-9]* signature' && continue
+  ostree gpg-sign --repo="$depot" "$ref" "$empreinte"
+done
+flatpak build-update-repo "$depot" --gpg-sign="$empreinte" --title="L Katta" --default-branch=master >/dev/null
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT

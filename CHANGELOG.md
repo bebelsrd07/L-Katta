@@ -13,6 +13,9 @@ Règle : chaque chiffre va de 0 à 9 (0.0.9 → 0.1.0, 0.9.9 → 1.0.0).
 - **Dépôt Flatpak** : `flatpak remote-add --user lkatta https://raantss18.github.io/L-Katta/flatpak/lkatta.flatpakrepo`
   puis `flatpak install --user lkatta io.github.raantss18.LKatta` ; les versions suivantes arrivent
   avec `flatpak update`. Le dépôt est signé (clé GPG du dépôt) et servi par le site.
+  `tool/depot-flatpak.sh` signe aussi les branches appstream laissées sans signature par
+  flatpak-builder : sans cela `flatpak update` affichait une erreur et Discover ou GNOME
+  Logiciels ne voyaient pas la fiche de l'app. Le site montre l'installation par le dépôt.
 
 ## 0.3.2 — 2026-11-15
 

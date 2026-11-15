@@ -133,6 +133,13 @@
       <p class="empreinte-ligne"><span class="empreinte" id="empreinte">{{SHA256}}</span> <button class="copier" type="button" data-copier="empreinte" hidden>Copier</button></p>
       <p>Autres façons : <a href="{{ARCHIVE_URL}}">l'archive <code>.tar.gz</code></a> ou les sources avec <code>cargo build --release</code>.</p>
     </details>
+    <details class="verifier" id="paquets">
+      <summary>Flatpak ou Arch Linux</summary>
+      <p><strong>Flatpak</strong>, par le dépôt signé de L Katta (les versions suivantes arrivent avec <code>flatpak update</code>) :</p>
+      <p><code>flatpak remote-add --user --if-not-exists lkatta https://raantss18.github.io/L-Katta/flatpak/lkatta.flatpakrepo</code></p>
+      <p><code>flatpak install --user lkatta io.github.raantss18.LKatta</code></p>
+      <p>Ce Flatpak n'isole pas L Katta : il lance les programmes de la machine, comme l'AppImage.</p>
+    </details>
   </div>
 </section>
 
