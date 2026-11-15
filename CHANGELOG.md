@@ -2,7 +2,7 @@
 
 Règle : chaque chiffre va de 0 à 9 (0.0.9 → 0.1.0, 0.9.9 → 1.0.0).
 
-## 0.2.7 — en cours
+## 0.2.7 — 2026-11-15
 
 - **L Katta sur les bureaux X11** (XFCE, Cinnamon, MATE, i3, KDE en X11), et sur GNOME par
   Xwayland : le même maki, les mêmes bulles, la même discussion, dans une fenêtre transparente
