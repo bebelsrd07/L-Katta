@@ -24,6 +24,6 @@ pkgbase = lkatta
 	conflicts = lkatta-bin
 	options = !lto
 	source = lkatta-0.3.1.tar.gz::https://github.com/raantss18/L-Katta/archive/refs/tags/v0.3.1.tar.gz
-	sha256sums = SKIP
+	sha256sums = 2c83c6b364de4732f146edc8f130c42dc8ef6292f5f659643d9049d3b6c4dda9
 
 pkgname = lkatta

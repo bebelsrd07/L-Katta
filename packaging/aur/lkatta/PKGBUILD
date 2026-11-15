@@ -24,7 +24,7 @@ provides=('lkatta')
 conflicts=('lkatta-bin')
 options=('!lto')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('2c83c6b364de4732f146edc8f130c42dc8ef6292f5f659643d9049d3b6c4dda9')
 
 prepare() {
   cd "L-Katta-$pkgver"
