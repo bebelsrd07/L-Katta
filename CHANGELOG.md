@@ -2,7 +2,7 @@
 
 Règle : chaque chiffre va de 0 à 9 (0.0.9 → 0.1.0, 0.9.9 → 1.0.0).
 
-## 0.2.8 — en cours
+## 0.2.8 — 2026-11-15
 
 - **Bureaux X11 complets** : les accents se tapent comme ailleurs (touches mortes ^ ¨ `,
   AltGr, touche Compose, ta disposition de clavier) ; le maki voit la fenêtre active (il se
