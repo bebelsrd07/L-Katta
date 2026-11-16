@@ -53,14 +53,26 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         run: |
+          # `set +e` : grep renvoie 1 quand il ne trouve rien, et un `| head` renvoie SIGPIPE
+          # — sous le `-eo pipefail` de `shell: bash`, l'un ou l'autre ferait échouer ce pas,
+          # qui est justement là pour rendre compte d'un échec.
+          set +e
+          grep -hE '^(error|warning)(\[E?[0-9]*\])?:|^ *--> |^test .* FAILED|^failures:|^ +[a-zA-Z_].*\.rs:[0-9]+' sortie-tests.log sortie-compile.log > erreurs-brutes.txt
+          head -100 erreurs-brutes.txt > erreurs-corps.txt
+          wc -l < erreurs-brutes.txt > erreurs-nombre.txt
+          set -e
           {
             echo "### Erreurs de compilation ou de tests (${GITHUB_SHA::7})"
+            echo
+            echo "$(cat erreurs-nombre.txt) ligne(s) retenue(s), 100 au plus :"
+            echo
             echo '```'
-            grep -hE '^(error|warning)(\[E?[0-9]*\])?:|^ *--> |^test .* FAILED|^failures:' sortie-tests.log sortie-compile.log 2>/dev/null | head -100
+            cat erreurs-corps.txt
             echo '```'
           } > erreurs.md
-          gh pr comment "$PR" --body-file erreurs.md
+          gh api -X POST "repos/$REPO/issues/$PR/comments" -F body=@erreurs.md
 
   # Reconnaissance Windows : ce que le portage natif (docs/PLAN.md, étape 0) devra rendre
   # compilable. `continue-on-error` pour l'instant — les crates Wayland/X11 ne se construisent
