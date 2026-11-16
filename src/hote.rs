@@ -30,6 +30,8 @@ pub fn commande(prog: impl AsRef<OsStr>) -> Command {
 pub fn commande_env(prog: impl AsRef<OsStr>, env: &[(&str, &OsStr)]) -> Command {
     if !flatpak() {
         let mut c = Command::new(prog);
+        #[cfg(windows)]
+        crate::os::win::sans_fenetre(&mut c);
         for (k, v) in env {
             c.env(k, v);
         }
@@ -81,12 +83,24 @@ pub fn existe(prog: &str) -> bool {
 }
 
 fn dans_path(prog: &str) -> bool {
-    std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).any(|d| d.join(prog).is_file()))
-        .unwrap_or(false)
+    let Some(path) = std::env::var_os("PATH") else { return false };
+    #[cfg(windows)]
+    {
+        let a_ext = std::path::Path::new(prog).extension().is_some();
+        let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+        let liste: Vec<&str> = exts.split(';').filter(|e| !e.is_empty()).collect();
+        std::env::split_paths(&path).any(|d| {
+            d.join(prog).is_file() || (!a_ext && liste.iter().any(|e| d.join(format!("{prog}{e}")).is_file()))
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::split_paths(&path).any(|d| d.join(prog).is_file())
+    }
 }
 
 /// Ligne de shell (sur la machine) qui relance L Katta.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn relancer_lkatta() -> String {
     if flatpak() {
         format!("exec setsid flatpak run {APP_ID}")
@@ -95,8 +109,11 @@ pub fn relancer_lkatta() -> String {
     }
 }
 
-/// Commande (pour un fichier .desktop, un raccourci) qui lance L Katta depuis le bureau.
+/// Commande (pour un fichier .desktop, une clé Run Windows, un raccourci) qui lance L Katta.
 pub fn lanceur_bureau() -> String {
+    #[cfg(windows)]
+    return format!("\"{}\"", crate::install::lanceur().display());
+    #[cfg(not(windows))]
     if flatpak() {
         format!("flatpak run {APP_ID}")
     } else {
@@ -104,7 +121,7 @@ pub fn lanceur_bureau() -> String {
     }
 }
 
-/// Installé par un gestionnaire de paquets (pacman, Flatpak…) : c'est lui qui met à jour.
+/// Installé par un gestionnaire de paquets (pacman, Flatpak, MSI…) : c'est lui qui met à jour.
 pub fn gestionnaire() -> Option<String> {
     if flatpak() {
         return Some("Flatpak".into());
@@ -113,6 +130,13 @@ pub fn gestionnaire() -> Option<String> {
         return None;
     }
     let exe = std::env::current_exe().ok()?;
+    #[cfg(windows)]
+    {
+        let s = exe.to_string_lossy().to_lowercase();
+        return (s.contains(r"\program files\") || s.contains(r"\program files (x86)\") || s.contains(r"\windowsapps\"))
+            .then(|| t!("ton gestionnaire de paquets").into());
+    }
+    #[cfg(not(windows))]
     (exe.starts_with("/usr/") || exe.starts_with("/opt/")).then(|| t!("ton gestionnaire de paquets").into())
 }
 
@@ -167,12 +191,20 @@ pub fn ouvrir(cible: &OsStr) -> std::io::Result<()> {
 /// comportement d'aujourd'hui.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn a_refuser(cible: &OsStr) -> bool {
-    const DANGEREUX: [&str; 12] = ["exe", "bat", "cmd", "com", "scr", "msi", "ps1", "vbs", "js", "jse", "hta", "wsf"];
+    const DANGEREUX: &[&str] = &[
+        "exe", "bat", "cmd", "com", "scr", "msi", "msp", "ps1", "ps2", "vbs", "vbe", "js", "jse", "hta", "wsf", "wsh", "sct", "lnk", "pif", "reg",
+        "cpl", "msc", "inf", "application", "appref-ms",
+    ];
     let nom = cible.to_string_lossy();
+    let nom = nom.trim_end_matches([' ', '.']);
     // Une adresse web se reconnaît à son schéma : « https://x/outil.exe » doit rester ouvrable,
     // c'est le navigateur qui décide ce qu'il en fait, et il ne l'exécute pas.
-    if nom.contains("://") {
+    if nom.starts_with("https://") || nom.starts_with("http://") {
         return false;
+    }
+    if nom.contains("://") {
+        // Ni `file:///C:/outil.exe`, ni `ms-msdt://` : seuls http et https sont des adresses web.
+        return true;
     }
     let Some(point) = nom.rfind('.') else { return false };
     DANGEREUX.contains(&nom[point + 1..].to_ascii_lowercase().as_str())
@@ -199,7 +231,23 @@ mod tests {
     #[test]
     fn open_never_runs_a_program() {
         use std::ffi::OsStr;
-        for c in ["outil.exe", "C:\\outils\\outil.EXE", "install.msi", "script.ps1", "macro.vbs", "départ.bat", "page.hta", "tâche.wsf", "charge.js"] {
+        for c in [
+            "outil.exe",
+            "C:\\outils\\outil.EXE",
+            "outil.exe.",
+            "outil.exe ",
+            "raccourci.lnk",
+            "cle.reg",
+            "file:///C:/Windows/System32/calc.exe",
+            "ms-msdt://id",
+            "install.msi",
+            "script.ps1",
+            "macro.vbs",
+            "départ.bat",
+            "page.hta",
+            "tâche.wsf",
+            "charge.js",
+        ] {
             assert!(super::a_refuser(OsStr::new(c)), "{c} devrait être refusé");
         }
         for c in ["notes.md", "config.toml", "photo.png", "facture.pdf", "C:\\docs\\rapport.docx", "/home/moi/Documents", "sans-extension", "https://exemple.fr/outil.exe", "http://a.b/c.ps1"] {
@@ -215,8 +263,17 @@ mod tests {
         let c = super::commande_env("true", &[("A", std::ffi::OsStr::new("1"))]);
         assert_eq!(c.get_program(), "true");
         assert!(c.get_envs().any(|(k, v)| k == "A" && v == Some(std::ffi::OsStr::new("1"))));
-        assert!(super::existe("sh"));
-        assert!(super::lanceur_bureau().contains("APPIMAGELAUNCHER_DISABLE=1"));
+        #[cfg(not(windows))]
+        {
+            assert!(super::existe("sh"));
+            assert!(super::lanceur_bureau().contains("APPIMAGELAUNCHER_DISABLE=1"));
+        }
+        #[cfg(windows)]
+        {
+            assert!(super::existe("cmd"));
+            assert!(super::existe("powershell"));
+            assert!(super::lanceur_bureau().starts_with('"'));
+        }
         assert_eq!(super::etc("/etc/os-release"), "/etc/os-release");
     }
 }

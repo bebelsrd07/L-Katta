@@ -13,35 +13,61 @@ const LARGEUR_MAX: u32 = 1600;
 
 /// Capture l'écran sous le pointeur (PNG réduit).
 pub fn capturer() -> Result<Vec<u8>, String> {
-    // Outil de capture du bureau : Spectacle (KDE), grim (Sway, Hyprland…), gnome-screenshot.
-    let outil = ["spectacle", "grim", "gnome-screenshot"].into_iter().find(|o| crate::config::which(o));
-    let Some(outil) = outil else {
-        return Err(t!("aucun outil de capture d'écran (spectacle, grim ou gnome-screenshot) n'est installé").into());
-    };
-    let dir = crate::paths::data_dir().join("captures");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let fichier = dir.join(format!("ecran-{}.png", std::process::id()));
-    // Le maki se rend invisible (sans bouger) le temps de la capture.
-    let _ = crate::ipc::send("capture on");
-    std::thread::sleep(Duration::from_millis(400));
-    let mut c = crate::hote::commande(outil);
-    match outil {
-        "spectacle" => c.args(["--background", "--nonotify", "--current", "--output"]),
-        "gnome-screenshot" => c.arg("-f"),
-        _ => &mut c,
-    };
-    let r = c
-        .arg(&fichier)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-    let _ = crate::ipc::send("capture off");
-    if !r.map(|s| s.success()).unwrap_or(false) {
-        return Err(t!("La capture d'écran a échoué.").into());
+    #[cfg(windows)]
+    {
+        // Le maki s'efface le temps de la capture ; l'image reste en mémoire sans passer par un
+        // fichier temporaire sur le disque.
+        let _ = crate::ipc::send("capture on");
+        std::thread::sleep(Duration::from_millis(120));
+        let img = crate::os::win::capturer_ecran();
+        let _ = crate::ipc::send("capture off");
+        return reduire_pixmap(img?);
     }
-    let png = std::fs::read(&fichier).map_err(|e| e.to_string());
-    let _ = std::fs::remove_file(&fichier);
-    reduire(&png?)
+    #[cfg(not(windows))]
+    {
+        // Outil de capture du bureau : Spectacle (KDE), grim (Sway, Hyprland…), gnome-screenshot.
+        let outil = ["spectacle", "grim", "gnome-screenshot"].into_iter().find(|o| crate::config::which(o));
+        let Some(outil) = outil else {
+            return Err(t!("aucun outil de capture d'écran (spectacle, grim ou gnome-screenshot) n'est installé").into());
+        };
+        let dir = crate::paths::data_dir().join("captures");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let fichier = dir.join(format!("ecran-{}.png", std::process::id()));
+        // Le maki se rend invisible (sans bouger) le temps de la capture.
+        let _ = crate::ipc::send("capture on");
+        std::thread::sleep(Duration::from_millis(400));
+        let mut c = crate::hote::commande(outil);
+        match outil {
+            "spectacle" => c.args(["--background", "--nonotify", "--current", "--output"]),
+            "gnome-screenshot" => c.arg("-f"),
+            _ => &mut c,
+        };
+        let r = c
+            .arg(&fichier)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        let _ = crate::ipc::send("capture off");
+        if !r.map(|s| s.success()).unwrap_or(false) {
+            return Err(t!("La capture d'écran a échoué.").into());
+        }
+        let png = std::fs::read(&fichier).map_err(|e| e.to_string());
+        let _ = std::fs::remove_file(&fichier);
+        reduire(&png?)
+    }
+}
+
+#[cfg(windows)]
+fn reduire_pixmap(img: Pixmap) -> Result<Vec<u8>, String> {
+    if img.width() <= LARGEUR_MAX {
+        return img.encode_png().map_err(|e| e.to_string());
+    }
+    let k = LARGEUR_MAX as f32 / img.width() as f32;
+    let (w, h) = (LARGEUR_MAX, ((img.height() as f32 * k).round() as u32).max(1));
+    let mut out = Pixmap::new(w, h).ok_or("image vide")?;
+    let paint = PixmapPaint { quality: tiny_skia::FilterQuality::Bicubic, ..Default::default() };
+    out.draw_pixmap(0, 0, img.as_ref(), &paint, Transform::from_scale(k, k), None);
+    out.encode_png().map_err(|e| e.to_string())
 }
 
 /// Réduit une image PNG à `LARGEUR_MAX` de large au plus.
@@ -70,9 +96,10 @@ pub fn decrire(png: &[u8], question: &str) -> Result<String, String> {
     let b64 = base64::engine::general_purpose::STANDARD.encode(png);
     let q = if question.trim().is_empty() { t!("Décris ce qu'il y a à l'écran : l'application, ce que je suis en train de faire, et ce qui mérite mon attention (erreur, avertissement).").to_string() } else { question.trim().to_string() };
     let lang = if crate::lang::en() { "Answer in English." } else { "Réponds en français." };
+    let bureau = if cfg!(windows) { "bureau Windows" } else { "bureau Linux KDE" };
     let messages = vec![
         json!({"role": "system", "content": format!(
-            "Tu regardes une capture de l'écran de l'utilisateur (bureau Linux KDE). Réponds précisément à sa question en t'appuyant sur ce qui est visible : \
+            "Tu regardes une capture de l'écran de l'utilisateur ({bureau}). Réponds précisément à sa question en t'appuyant sur ce qui est visible : \
              recopie exactement les messages d'erreur importants, nomme les applications. Ignore le petit lémurien et sa bulle s'ils apparaissent. \
              Si un texte est illisible, dis-le plutôt que de deviner. {lang}")}),
         json!({"role": "user", "content": [

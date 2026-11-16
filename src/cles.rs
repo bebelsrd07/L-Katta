@@ -4,7 +4,9 @@
 //! clé n'est envoyée qu'à l'hôte prévu).
 
 use std::collections::HashMap;
+#[cfg(not(windows))]
 use std::io::Write;
+#[cfg(not(windows))]
 use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
 
@@ -52,45 +54,90 @@ fn cache() -> &'static Mutex<HashMap<String, Option<String>>> {
     C.get_or_init(Default::default)
 }
 
-fn lookup(attrs: &[&str]) -> Option<String> {
-    let o = crate::hote::commande("secret-tool").arg("lookup").args(attrs).stderr(Stdio::null()).output().ok()?;
-    let v = String::from_utf8_lossy(&o.stdout).trim_end_matches('\n').to_string();
-    (!v.is_empty()).then_some(v)
+/// Nom de cible dans le Gestionnaire d'identification Windows à partir des paires clé/valeur
+/// du trousseau (`["service", "lkatta", "fournisseur", "groq"]` →
+/// `"lkatta:service=lkatta;fournisseur=groq"`).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn cible_win(attrs: &[&str]) -> String {
+    let paires: Vec<String> = attrs.chunks(2).map(|c| match c {
+        [k, v] => format!("{k}={v}"),
+        [k] => (*k).to_string(),
+        _ => String::new(),
+    }).collect();
+    format!("lkatta:{}", paires.join(";"))
 }
 
-/// Range un secret dans le trousseau (lu sur l'entrée standard, jamais en argument).
+pub(crate) fn lookup(attrs: &[&str]) -> Option<String> {
+    #[cfg(windows)]
+    {
+        return crate::os::win::cred_lire(&cible_win(attrs));
+    }
+    #[cfg(not(windows))]
+    {
+        let o = crate::hote::commande("secret-tool").arg("lookup").args(attrs).stderr(Stdio::null()).output().ok()?;
+        let v = String::from_utf8_lossy(&o.stdout).trim_end_matches('\n').to_string();
+        (!v.is_empty()).then_some(v)
+    }
+}
+
+/// Range un secret dans le trousseau (jamais en argument ni dans un fichier).
 pub fn store(label: &str, attrs: &[&str], secret: &str) -> Result<(), String> {
-    let mut child = crate::hote::commande("secret-tool")
-        .arg("store")
-        .arg(format!("--label={label}"))
-        .args(attrs)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|_| t!("secret-tool absent (paquet libsecret)").to_string())?;
-    child.stdin.take().ok_or("stdin")?.write_all(secret.as_bytes()).map_err(|e| e.to_string())?;
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-    cache().lock().map(|mut c| c.clear()).ok();
-    if out.status.success() { Ok(()) } else { Err(t!("trousseau : {}", String::from_utf8_lossy(&out.stderr).trim())) }
+    #[cfg(windows)]
+    {
+        let r = crate::os::win::cred_ecrire(&cible_win(attrs), label, secret);
+        cache().lock().map(|mut c| c.clear()).ok();
+        return r;
+    }
+    #[cfg(not(windows))]
+    {
+        let mut child = crate::hote::commande("secret-tool")
+            .arg("store")
+            .arg(format!("--label={label}"))
+            .args(attrs)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|_| t!("secret-tool absent (paquet libsecret)").to_string())?;
+        child.stdin.take().ok_or("stdin")?.write_all(secret.as_bytes()).map_err(|e| e.to_string())?;
+        let out = child.wait_with_output().map_err(|e| e.to_string())?;
+        cache().lock().map(|mut c| c.clear()).ok();
+        if out.status.success() { Ok(()) } else { Err(t!("trousseau : {}", String::from_utf8_lossy(&out.stderr).trim())) }
+    }
 }
 
 pub fn clear(attrs: &[&str]) {
-    let _ = crate::hote::commande("secret-tool").arg("clear").args(attrs).status();
+    #[cfg(windows)]
+    crate::os::win::cred_effacer(&cible_win(attrs));
+    #[cfg(not(windows))]
+    {
+        let _ = crate::hote::commande("secret-tool").arg("clear").args(attrs).status();
+    }
     cache().lock().map(|mut c| c.clear()).ok();
 }
 
-/// Range un secret en le faisant taper par l'utilisateur : `secret-tool` lit le terminal, donc
-/// rien ne s'affiche et rien ne passe en argument (ni dans `ps`, ni dans l'historique du shell).
-fn store_interactif(label: &str, attrs: &[&str]) -> Result<(), String> {
-    let st = crate::hote::commande("secret-tool")
-        .arg("store")
-        .arg(format!("--label={label}"))
-        .args(attrs)
-        .status()
-        .map_err(|_| t!("secret-tool absent (paquet libsecret)").to_string())?;
-    cache().lock().map(|mut c| c.clear()).ok();
-    if st.success() { Ok(()) } else { Err(t!("jeton non enregistré").into()) }
+/// Range un secret en le faisant taper par l'utilisateur sans écho dans le terminal (ni dans `ps`,
+/// ni dans l'historique du shell).
+pub(crate) fn store_interactif(label: &str, attrs: &[&str]) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let secret = crate::os::win::lire_secret_console()?;
+        if secret.trim().is_empty() {
+            return Err(t!("jeton non enregistré").into());
+        }
+        return store(label, attrs, secret.trim());
+    }
+    #[cfg(not(windows))]
+    {
+        let st = crate::hote::commande("secret-tool")
+            .arg("store")
+            .arg(format!("--label={label}"))
+            .args(attrs)
+            .status()
+            .map_err(|_| t!("secret-tool absent (paquet libsecret)").to_string())?;
+        cache().lock().map(|mut c| c.clear()).ok();
+        if st.success() { Ok(()) } else { Err(t!("jeton non enregistré").into()) }
+    }
 }
 
 /// Une clé plausible (pas un texte à remplacer) ?

@@ -245,13 +245,15 @@ mod win {
 
     /// Le corps de `lire`, presse-papiers déjà ouvert.
     fn lire_ouvert() -> Option<(String, bool)> {
-        // SAFETY : nom en UTF-16 terminé par un NUL, vivant jusqu'à la fin de l'appel.
-        let secret = {
-            let mut nom: Vec<u16> = FORMAT_SECRET.encode_utf16().collect();
+        let secret = |f: &str| {
+            let mut nom: Vec<u16> = f.encode_utf16().collect();
             nom.push(0);
-            unsafe { RegisterClipboardFormatW(nom.as_ptr()) }
+            // SAFETY : nom en UTF-16 terminé par un NUL, vivant jusqu'à la fin de l'appel.
+            let id = unsafe { RegisterClipboardFormatW(nom.as_ptr()) };
+            id != 0 && unsafe { IsClipboardFormatAvailable(id) } != 0
         };
-        let marque = secret != 0 && unsafe { IsClipboardFormatAvailable(secret) } != 0;
+        // Bitwarden, 1Password, KeePassXC et le presse-papiers Windows posent l'un ou l'autre.
+        let marque = secret(FORMAT_SECRET) || secret("Clipboard Viewer Ignore");
         if unsafe { IsClipboardFormatAvailable(CF_UNICODETEXT) } == 0 {
             return None;
         }

@@ -9,6 +9,13 @@ use crate::{clipboard, mascot, paths, reminders, tools, web};
 
 pub fn run() -> Result<(), String> {
     if ipc::daemon_running() {
+        // Sur Windows, relancer `lkatta.exe` d'un double-clic quand le maki est déjà là ouvre sa
+        // bulle de discussion plutôt que d'échouer en silence.
+        #[cfg(windows)]
+        if std::env::args_os().nth(1).is_none() {
+            let _ = ipc::send("discuter");
+            return Ok(());
+        }
         return Err(t!("L Katta tourne déjà (lkatta quitter pour l'arrêter).").into());
     }
     let cfg = Config::load();

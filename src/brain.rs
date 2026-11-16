@@ -568,8 +568,19 @@ fn start_engine(m: &Moteur) -> Result<(), String> {
     let _ = std::fs::create_dir_all(paths::data_dir());
     let out = std::fs::OpenOptions::new().create(true).append(true).open(&log).map_err(|e| e.to_string())?;
     let err = out.try_clone().map_err(|e| e.to_string())?;
-    let mut cmd = crate::hote::commande("sh");
-    cmd.args(["-c", &m.demarrer]).stdin(std::process::Stdio::null()).stdout(out).stderr(err);
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut c = crate::hote::commande("cmd");
+        c.args(["/c", &m.demarrer]);
+        c
+    };
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let mut c = crate::hote::commande("sh");
+        c.args(["-c", &m.demarrer]);
+        c
+    };
+    cmd.stdin(std::process::Stdio::null()).stdout(out).stderr(err);
     // Sa propre session : le moteur survit au panneau (sur Windows, processus détaché).
     crate::os::detacher(&mut cmd);
     cmd.spawn().map_err(|e| t!("démarrage impossible : {}", e))?;

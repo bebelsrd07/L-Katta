@@ -69,6 +69,7 @@ unsafe extern "system" {
     fn TranslateMessage(m: *const MSG) -> i32;
     fn DispatchMessageW(m: *const MSG) -> isize;
     fn PostQuitMessage(code: i32);
+    fn PostMessageW(fenetre: isize, message: u32, w: usize, l: isize) -> i32;
     fn DestroyWindow(fenetre: isize) -> i32;
     fn SetTimer(fenetre: isize, id: usize, millisecondes: u32, rappel: usize) -> usize;
     fn KillTimer(fenetre: isize, id: usize) -> i32;
@@ -223,7 +224,9 @@ const WM_LBUTTONUP: u32 = 0x0202;
 const WM_RBUTTONUP: u32 = 0x0205;
 const WM_MBUTTONUP: u32 = 0x0208;
 const WM_MOUSELEAVE: u32 = 0x02A3;
-const WM_KILLFOCUS: u32 = 0x0006;
+const WM_SETFOCUS: u32 = 0x0007;
+const WM_KILLFOCUS: u32 = 0x0008;
+const WM_APPLIQUER_CLAVIER: u32 = 0x8001;
 const WM_KEYDOWN: u32 = 0x0100;
 const WM_CHAR: u32 = 0x0102;
 
@@ -237,6 +240,7 @@ const SWP_NOACTIVATE: u32 = 0x0010;
 /// Touches virtuelles. Les lettres ont le code de leur majuscule ASCII.
 const VK_SHIFT: i32 = 0x10;
 const VK_CONTROL: i32 = 0x11;
+const VK_MENU: i32 = 0x12;
 const VK_BACK: usize = 0x08;
 const VK_RETURN: usize = 0x0D;
 const VK_ESCAPE: usize = 0x1B;
@@ -264,7 +268,7 @@ const LOGPIXELSX: i32 = 88;
 const SPI_GETWORKAREA: u32 = 0x0030;
 const DIB_RGB_COLORS: u32 = 0;
 const BI_RGB: u32 = 0;
-const ULW_ALPHA: u32 = 0x0000_0004;
+const ULW_ALPHA: u32 = 0x0000_0002;
 const AC_SRC_OVER: u8 = 0x00;
 const AC_SRC_ALPHA: u8 = 0x01;
 const TME_LEAVE: u32 = 0x0000_0002;
@@ -451,8 +455,8 @@ pub fn run(cfg: Config, rx: crate::os::canal::Recepteur<Msg>) -> Result<(), Stri
             // SAFETY : `a.dc`, `a.bit` viennent de `CreateCompatibleDC` et `CreateDIBSection`,
             // supprimés une seule fois, ici, après la fin de la boucle de messages.
             unsafe {
-                DeleteObject(a.bit);
                 DeleteDC(a.dc);
+                DeleteObject(a.bit);
             }
         }
     });
@@ -535,12 +539,30 @@ unsafe extern "system" fn procedure(fenetre: isize, message: u32, w: usize, l: i
             });
             0
         }
+        WM_APPLIQUER_CLAVIER => {
+            // Ne pas tenir un emprunt de ETAT : ces appels peuvent envoyer WM_SETFOCUS.
+            unsafe {
+                let ex = GetWindowLongPtrW(fenetre, GWL_EXSTYLE);
+                let nouveau = if w != 0 { ex & !(WS_EX_NOACTIVATE as isize) } else { ex | WS_EX_NOACTIVATE as isize };
+                SetWindowLongPtrW(fenetre, GWL_EXSTYLE, nouveau);
+                if w != 0 {
+                    SetForegroundWindow(fenetre);
+                    SetFocus(fenetre);
+                }
+            }
+            0
+        }
+        WM_SETFOCUS => {
+            avec_etat(|a| { a.a_le_clavier = true; a.chat.retour_attendu = false; });
+            0
+        }
         WM_KILLFOCUS => {
             // Le clavier part ailleurs : la discussion se referme. C'est le comportement de la
             // version Linux, où la bulle ouverte par un clic « se referme quand on clique
             // ailleurs » — ici l'ailleurs se voit directement, par la perte du focus.
             avec_etat(|a| {
-                if a.chat.open {
+                a.a_le_clavier = false;
+                if a.chat.fermable() {
                     a.basculer_chat();
                 }
             });
@@ -567,8 +589,10 @@ unsafe extern "system" fn procedure(fenetre: isize, message: u32, w: usize, l: i
 /// par Windows pendant un traitement, et une seconde `borrow_mut` paniquerait.
 fn avec_etat(f: impl FnOnce(&mut Etat)) {
     ETAT.with(|e| {
-        if let Some(a) = &mut *e.borrow_mut() {
-            f(a);
+        if let Ok(mut etat) = e.try_borrow_mut() {
+            if let Some(a) = &mut *etat {
+                f(a);
+            }
         }
     });
 }
@@ -1194,17 +1218,8 @@ impl Etat {
             return;
         }
         self.a_le_clavier = veut;
-        // SAFETY : lecture puis écriture du style étendu de notre fenêtre, créée ici.
-        unsafe {
-            let ex = GetWindowLongPtrW(self.fenetre, GWL_EXSTYLE);
-            let nouveau = if veut { ex & !(WS_EX_NOACTIVATE as isize) } else { ex | WS_EX_NOACTIVATE as isize };
-            SetWindowLongPtrW(self.fenetre, GWL_EXSTYLE, nouveau);
-            if veut {
-                // Sans activation aucune touche n'arrive : c'est tout l'objet du basculement.
-                SetForegroundWindow(self.fenetre);
-                SetFocus(self.fenetre);
-            }
-        }
+        // Appliquer après la fin du rappel courant : SetFocus envoie des messages synchrones.
+        unsafe { PostMessageW(self.fenetre, WM_APPLIQUER_CLAVIER, usize::from(veut), 0) };
     }
 
     /// Un clic, dans les coordonnées de la surface.
@@ -1331,11 +1346,11 @@ impl Etat {
         if !self.chat.open {
             return;
         }
-        let (ctrl, shift) = (touche_enfoncee(VK_CONTROL), touche_enfoncee(VK_SHIFT));
+        let (ctrl, shift) = (touche_enfoncee(VK_CONTROL) && !touche_enfoncee(VK_MENU), touche_enfoncee(VK_SHIFT));
         let champ = self.chat.has_field_focus();
         match vk {
             VK_ESCAPE => {
-                if champ { self.chat.field_escape() } else { self.basculer_chat() }
+                if champ { self.chat.field_escape() } else if self.chat.busy && !crate::controle::arrete() { self.chat.arreter() } else { self.basculer_chat() }
             }
             VK_RETURN => {
                 if champ {
@@ -1635,6 +1650,13 @@ fn large(s: &str) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn win32_alpha_and_focus_constants() {
+        assert_eq!(ULW_ALPHA, 2);
+        assert_eq!(WM_SETFOCUS, 7);
+        assert_eq!(WM_KILLFOCUS, 8);
+    }
 
     #[test]
     fn the_work_area_is_never_empty_or_inverted() {

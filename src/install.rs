@@ -5,6 +5,7 @@ use tiny_skia::{Pixmap, Transform};
 use crate::mascot::{behavior::Pose, draw};
 use crate::paths;
 
+#[cfg_attr(windows, allow(dead_code))]
 fn desktop(exec: &str, name: &str, comment: &str, extra: &str) -> String {
     format!(
         "[Desktop Entry]\nType=Application\nName={name}\nComment={comment}\nExec={exec}\nIcon=lkatta\n\
@@ -12,7 +13,88 @@ fn desktop(exec: &str, name: &str, comment: &str, extra: &str) -> String {
     )
 }
 
+#[cfg(windows)]
+const CLE_RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+
+#[cfg(windows)]
+fn raccourci_menu_demarrer() -> std::path::PathBuf {
+    std::env::var_os("APPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| paths::home_dir().join(r"AppData\Roaming"))
+        .join(r"Microsoft\Windows\Start Menu\Programs\L Katta.lnk")
+}
+
+#[cfg(windows)]
+fn creer_raccourci_win(lnk: &std::path::Path, cible: &std::path::Path, icone: &std::path::Path) {
+    use base64::Engine;
+    let ech = |p: &std::path::Path| p.to_string_lossy().replace('\'', "''");
+    let script = format!(
+        "$w = New-Object -ComObject WScript.Shell; \
+         $s = $w.CreateShortcut('{}'); \
+         $s.TargetPath = '{}'; \
+         $s.WorkingDirectory = '{}'; \
+         $s.Description = 'L Katta — petit maki assistant du bureau'; \
+         $s.IconLocation = '{},0'; \
+         $s.Save()",
+        ech(lnk),
+        ech(cible),
+        ech(cible.parent().unwrap_or(cible)),
+        ech(icone),
+    );
+    let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let enc = base64::engine::general_purpose::STANDARD.encode(utf16);
+    let _ = crate::hote::commande("powershell")
+        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", &enc])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
+#[cfg(windows)]
+fn install_windows() -> Result<(), String> {
+    let bin = paths::binaire_installe();
+    let dossier = bin.parent().ok_or("dossier d'installation invalide")?;
+    std::fs::create_dir_all(dossier).map_err(|e| e.to_string())?;
+    let exe = paths::self_exe();
+    let meme = exe.canonicalize().ok().is_some_and(|a| bin.canonicalize().ok().as_ref() == Some(&a));
+    if !meme {
+        let tmp = dossier.join("lkatta.nouveau.exe");
+        let ancien = dossier.join("lkatta.ancien.exe");
+        std::fs::copy(&exe, &tmp).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_file(&ancien);
+        // Sous Windows, un .exe en cours d'exécution ne peut pas être écrasé mais peut être renommé.
+        if bin.exists() {
+            let _ = std::fs::rename(&bin, &ancien);
+        }
+        std::fs::rename(&tmp, &bin).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_file(&ancien);
+    }
+    let ico = dossier.join("lkatta.ico");
+    let pngs: Vec<Vec<u8>> = [16, 32, 48, 256].into_iter().filter_map(|t| icon(t).encode_png().ok()).collect();
+    let refs: Vec<&[u8]> = pngs.iter().map(Vec::as_slice).collect();
+    let _ = std::fs::write(&ico, crate::os::win::construire_ico(&refs));
+    let lnk = raccourci_menu_demarrer();
+    if let Some(p) = lnk.parent() {
+        let _ = std::fs::create_dir_all(p);
+    }
+    creer_raccourci_win(&lnk, &bin, &ico);
+    let auto_msg = sync_autostart(crate::config::Config::load().demarrage_auto)?;
+    println!(
+        "{}",
+        t!(
+            "Installé : {}\n{}\nMenu Démarrer : « L Katta ».\nRaccourci clavier : Ctrl+Alt+K pour ouvrir la bulle.\nLance « L Katta » depuis le menu Démarrer ou en double-cliquant sur le fichier.",
+            bin.display(),
+            auto_msg
+        )
+    );
+    Ok(())
+}
+
 pub fn install() -> Result<(), String> {
+    #[cfg(windows)]
+    return install_windows();
+    #[cfg(not(windows))]
+    {
     if let Some(g) = crate::hote::gestionnaire() {
         return Err(t!("L Katta est déjà installé par {} : rien à copier. Démarrage automatique : lkatta demarrage on", g));
     }
@@ -54,16 +136,29 @@ pub fn install() -> Result<(), String> {
     );
     let _ = &auto;
     Ok(())
+    }
 }
 
 /// Le binaire à lancer depuis le bureau : celui installé, sinon celui-ci.
 pub fn lanceur() -> std::path::PathBuf {
-    let bin = paths::home_dir().join(".local/bin/lkatta");
+    let bin = paths::binaire_installe();
     if bin.exists() { bin } else { crate::paths::self_exe() }
 }
 
-/// Démarrage automatique à l'ouverture de session (fichier ~/.config/autostart/lkatta.desktop).
+/// Démarrage automatique à l'ouverture de session (`~/.config/autostart` sous Linux, clé `Run` utilisateur sous Windows).
 pub fn sync_autostart(on: bool) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        if !on {
+            crate::os::win::reg_supprimer_valeur(crate::os::win::HKEY_CURRENT_USER, CLE_RUN, "LKatta");
+            return Ok(t!("Démarrage automatique : désactivé.").into());
+        }
+        let cmd = crate::hote::lanceur_bureau();
+        crate::os::win::reg_ecrire_chaine(crate::os::win::HKEY_CURRENT_USER, CLE_RUN, "LKatta", &cmd)?;
+        return Ok(t!("Démarrage automatique : activé ({}).", r"HKCU\…\CurrentVersion\Run\LKatta"));
+    }
+    #[cfg(not(windows))]
+    {
     let file = paths::home_dir().join(".config/autostart/lkatta.desktop");
     if !on {
         let _ = std::fs::remove_file(&file);
@@ -81,9 +176,33 @@ pub fn sync_autostart(on: bool) -> Result<String, String> {
     )
     .map_err(|e| e.to_string())?;
     Ok(t!("Démarrage automatique : activé ({}).", file.display()))
+    }
 }
 
 pub fn uninstall() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        crate::os::win::reg_supprimer_valeur(crate::os::win::HKEY_CURRENT_USER, CLE_RUN, "LKatta");
+        let _ = std::fs::remove_file(raccourci_menu_demarrer());
+        let _ = crate::ipc::send("quitter");
+        let bin = paths::binaire_installe();
+        if let Some(d) = bin.parent() {
+            let _ = std::fs::remove_file(d.join("lkatta.ico"));
+            let _ = std::fs::remove_file(d.join("lkatta.ancien.exe"));
+        }
+        println!(
+            "{}",
+            t!(
+                "Démarrage automatique et raccourci du menu Démarrer retirés. Le binaire {} et vos données\n({} , {}) sont conservés.",
+                bin.display(),
+                paths::config_dir().display(),
+                paths::data_dir().display()
+            )
+        );
+        return Ok(());
+    }
+    #[cfg(not(windows))]
+    {
     let home = paths::home_dir();
     for p in [
         home.join(".config/autostart/lkatta.desktop"),
@@ -105,6 +224,7 @@ pub fn uninstall() -> Result<(), String> {
         )
     );
     Ok(())
+    }
 }
 
 /// Icône : la tête du maki.

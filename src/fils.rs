@@ -360,7 +360,24 @@ pub fn dossier_valide(chemin: &str) -> Result<String, String> {
     }
     let interdits = ["/", "/etc", "/usr", "/bin", "/sbin", "/boot", "/dev", "/proc", "/sys", "/var", "/lib", "/lib64", "/root"];
     let abs = p.canonicalize().unwrap_or(p.clone());
-    if interdits.iter().any(|i| abs == std::path::Path::new(i)) {
+    let refuse_win = {
+        #[cfg(windows)]
+        {
+            let s = abs.to_string_lossy();
+            let s = s.strip_prefix(r"\\?\").unwrap_or(&s).trim_end_matches('\\').to_lowercase();
+            // Racine d'un lecteur (« c: ») ou dossier système Windows.
+            (s.len() == 2 && s.ends_with(':'))
+                || matches!(
+                    s.as_str(),
+                    r"c:\windows" | r"c:\windows\system32" | r"c:\program files" | r"c:\program files (x86)" | r"c:\programdata" | r"c:\users"
+                )
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    };
+    if refuse_win || interdits.iter().any(|i| abs == std::path::Path::new(i)) {
         return Err(t!("Pas un dossier système comme projet : {}", abs.display()));
     }
     let home = paths::home_dir();
@@ -410,10 +427,19 @@ mod tests {
 
     #[test]
     fn rejects_system_folders() {
-        assert!(dossier_valide("/").is_err());
-        assert!(dossier_valide("/etc").is_err());
+        #[cfg(not(windows))]
+        {
+            assert!(dossier_valide("/").is_err());
+            assert!(dossier_valide("/etc").is_err());
+            assert!(dossier_valide("/tmp").is_ok());
+        }
+        #[cfg(windows)]
+        {
+            assert!(dossier_valide(r"C:\").is_err());
+            assert!(dossier_valide(r"C:\Windows").is_err());
+            assert!(dossier_valide(&std::env::temp_dir().to_string_lossy()).is_ok());
+        }
         assert!(dossier_valide("/nexiste/pas").is_err());
-        assert!(dossier_valide("/tmp").is_ok());
         assert!(fil_file("../../etc/passwd").to_string_lossy().ends_with("etcpasswd.json"));
     }
 }

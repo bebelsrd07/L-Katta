@@ -2,10 +2,26 @@
 
 use std::path::PathBuf;
 
+#[cfg(not(windows))]
 fn home() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/tmp"))
 }
 
+#[cfg(windows)]
+fn home() -> PathBuf {
+    std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .or_else(|| {
+            let (d, p) = (std::env::var_os("HOMEDRIVE")?, std::env::var_os("HOMEPATH")?);
+            let mut r = std::ffi::OsString::from(d);
+            r.push(p);
+            Some(PathBuf::from(r))
+        })
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+        .unwrap_or_else(std::env::temp_dir)
+}
+
+#[cfg(not(windows))]
 fn xdg(var: &str, fallback: &str) -> PathBuf {
     // Dans le Flatpak : les dossiers de la machine (~/.config/lkatta…), les mêmes que ceux de
     // l'AppImage ; ceux du bac à sable (~/.var/app/…) ne sont pas vus par KWin ni GNOME Shell.
@@ -16,14 +32,40 @@ fn xdg(var: &str, fallback: &str) -> PathBuf {
         .unwrap_or_else(|| home().join(fallback))
 }
 
-/// `~/.config/lkatta`
+#[cfg(windows)]
+fn dossier_win(surcharge_xdg: &str, var_win: &str, repli: &str) -> PathBuf {
+    // `XDG_*` n'est jamais posé par Windows, mais sert aux essais isolés et aux utilisateurs qui
+    // choisissent expressément un autre emplacement. Sinon `%APPDATA%` et `%LOCALAPPDATA%`.
+    std::env::var_os(surcharge_xdg)
+        .or_else(|| std::env::var_os(var_win))
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| home().join(repli))
+}
+
+/// `~/.config/lkatta` sous Linux, `%APPDATA%\lkatta` sous Windows.
 pub fn config_dir() -> PathBuf {
+    #[cfg(windows)]
+    return dossier_win("XDG_CONFIG_HOME", "APPDATA", r"AppData\Roaming").join("lkatta");
+    #[cfg(not(windows))]
     xdg("XDG_CONFIG_HOME", ".config").join("lkatta")
 }
 
-/// `~/.local/share/lkatta`
+/// `~/.local/share/lkatta` sous Linux, `%LOCALAPPDATA%\lkatta` sous Windows.
 pub fn data_dir() -> PathBuf {
+    #[cfg(windows)]
+    return dossier_win("XDG_DATA_HOME", "LOCALAPPDATA", r"AppData\Local").join("lkatta");
+    #[cfg(not(windows))]
     xdg("XDG_DATA_HOME", ".local/share").join("lkatta")
+}
+
+/// Emplacement d'installation utilisateur (`~/.local/bin/lkatta` ou
+/// `%LOCALAPPDATA%\Programs\LKatta\lkatta.exe`).
+pub fn binaire_installe() -> PathBuf {
+    #[cfg(windows)]
+    return dossier_win("LKATTA_INSTALL_DIR", "LOCALAPPDATA", r"AppData\Local").join(r"Programs\LKatta\lkatta.exe");
+    #[cfg(not(windows))]
+    home().join(".local/bin/lkatta")
 }
 
 /// Dossier d'exécution (socket, verrous). Repli sur le dossier de données.
@@ -67,6 +109,7 @@ pub fn reminders_file() -> PathBuf {
 pub fn clipboard_file() -> PathBuf {
     data_dir().join("presse-papiers.json")
 }
+#[cfg_attr(windows, allow(dead_code))]
 pub fn socket_file() -> PathBuf {
     runtime_dir().join("lkatta.sock")
 }
@@ -90,7 +133,7 @@ pub fn self_exe() -> PathBuf {
     if let Some(a) = std::env::var_os("APPIMAGE") {
         return PathBuf::from(a);
     }
-    let installed = home().join(".local/bin/lkatta");
+    let installed = binaire_installe();
     match std::env::current_exe() {
         Ok(p) => {
             let s = p.to_string_lossy();
@@ -126,10 +169,10 @@ pub fn travail() -> PathBuf {
 pub fn expand(p: &str) -> PathBuf {
     if p == "~" {
         home()
-    } else if let Some(rest) = p.strip_prefix("~/") {
-        // « ~//x » reste sous le dossier personnel (join remplacerait tout par « /x »).
-        home().join(rest.trim_start_matches('/'))
-    } else if !p.is_empty() && !p.starts_with('/') {
+    } else if let Some(rest) = p.strip_prefix("~/").or_else(|| p.strip_prefix(r"~\")) {
+        // « ~//x » et « ~\\x » restent sous le dossier personnel (join remplacerait tout par la racine).
+        home().join(rest.trim_start_matches(['/', '\\']))
+    } else if !p.is_empty() && !std::path::Path::new(p).is_absolute() {
         travail().join(p)
     } else {
         PathBuf::from(p)
@@ -158,4 +201,23 @@ pub fn write_private(path: &std::path::Path, contents: &[u8]) -> std::io::Result
         }
     }
     std::fs::rename(tmp, path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expand_handles_tilde_and_absolute_paths() {
+        assert_eq!(expand("~"), home_dir());
+        assert_eq!(expand("~/Documents/note.md"), home_dir().join("Documents/note.md"));
+        assert_eq!(expand(r"~\Documents"), home_dir().join("Documents"));
+        assert_eq!(expand("~//secret"), home_dir().join("secret"));
+        #[cfg(windows)]
+        {
+            assert!(config_dir().is_absolute());
+            assert!(data_dir().is_absolute());
+            assert_eq!(expand(r"C:\Projets\demo"), PathBuf::from(r"C:\Projets\demo"));
+        }
+    }
 }

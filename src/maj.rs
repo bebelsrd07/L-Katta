@@ -6,7 +6,9 @@
 //! un fichier que la clé n'a pas signé. Une version sans signature valide est refusée.
 
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+#[cfg(not(windows))]
+use std::process::Command;
+use std::process::Stdio;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -46,9 +48,17 @@ fn verifier(dir: &std::path::Path, nom: &str) -> Result<(), String> {
         return Err(t!("signature de la version incorrecte : mise à jour refusée").into());
     }
     let attendue = empreinte_attendue(&String::from_utf8_lossy(&sommes), nom).ok_or_else(|| t!("empreinte SHA-256 incorrecte : mise à jour refusée").to_string())?;
-    let o = Command::new("sha256sum").arg(dir.join(nom)).output().map_err(|e| e.to_string())?;
-    let obtenue = String::from_utf8_lossy(&o.stdout).split_whitespace().next().unwrap_or("").to_lowercase();
-    if !o.status.success() || obtenue != attendue {
+    #[cfg(windows)]
+    let obtenue = crate::os::win::sha256_fichier(&dir.join(nom))?;
+    #[cfg(not(windows))]
+    let obtenue = {
+        let o = Command::new("sha256sum").arg(dir.join(nom)).output().map_err(|e| e.to_string())?;
+        if !o.status.success() {
+            return Err(t!("empreinte SHA-256 incorrecte : mise à jour refusée").into());
+        }
+        String::from_utf8_lossy(&o.stdout).split_whitespace().next().unwrap_or("").to_lowercase()
+    };
+    if obtenue != attendue {
         return Err(t!("empreinte SHA-256 incorrecte : mise à jour refusée").into());
     }
     Ok(())
@@ -117,11 +127,19 @@ pub fn check() -> Result<Option<Release>, String> {
             .unwrap_or("")
             .to_string()
     };
-    let archive = url(&|n| n.ends_with("x86_64-linux.tar.gz"));
     let sums = url(&|n| n == "SHA256SUMS");
-    let appimage = url(&|n| n.ends_with("x86_64.AppImage"));
     let sig = url(&|n| n == "SHA256SUMS.sig");
+    #[cfg(windows)]
+    let (archive, appimage) = (
+        url(&|n| n.ends_with("x86_64-windows.exe") || n.ends_with("windows-x86_64.exe") || n == "lkatta.exe"),
+        String::new(),
+    );
+    #[cfg(not(windows))]
+    let (archive, appimage) = (url(&|n| n.ends_with("x86_64-linux.tar.gz")), url(&|n| n.ends_with("x86_64.AppImage")));
     if (archive.is_empty() && appimage.is_empty()) || sums.is_empty() {
+        #[cfg(windows)]
+        return Err(t!("la release {} n'a pas de binaire Windows vérifiable", tag));
+        #[cfg(not(windows))]
         return Err(t!("la release {} n'a pas d'archive Linux vérifiable", tag));
     }
     if sig.is_empty() {
@@ -138,9 +156,9 @@ pub fn check() -> Result<Option<Release>, String> {
     }))
 }
 
-/// Binaire installé (~/.local/bin/lkatta) : seul celui-ci est remplacé.
+/// Binaire installé (`~/.local/bin/lkatta` sous Linux, `%LOCALAPPDATA%\Programs\LKatta\lkatta.exe` sous Windows) : seul celui-ci est remplacé.
 pub fn installed_bin() -> PathBuf {
-    paths::home_dir().join(".local/bin/lkatta")
+    paths::binaire_installe()
 }
 
 fn download(url: &str, to: &std::path::Path) -> Result<(), String> {
@@ -185,25 +203,46 @@ pub fn install(rel: &Release) -> Result<String, String> {
     download(&rel.sig, &dir.join("SHA256SUMS.sig"))?;
     // Signature et empreinte vérifiées avant toute installation.
     verifier(&dir, &name)?;
-    let st = Command::new("tar").arg("-xzf").arg(&tar).arg("-C").arg(&dir).status().map_err(|e| e.to_string())?;
-    if !st.success() {
-        return Err(t!("archive illisible").into());
-    }
-    let new_bin = walkdir::WalkDir::new(&dir)
-        .into_iter()
-        .flatten()
-        .find(|e| e.file_name() == "lkatta" && e.file_type().is_file())
-        .map(|e| e.into_path())
-        .ok_or(t!("binaire absent de l'archive"))?;
-    let out = Command::new(&new_bin).arg("version").output().map_err(|e| t!("nouveau binaire inutilisable : {}", e))?;
+    #[cfg(windows)]
+    let new_bin = tar;
+    #[cfg(not(windows))]
+    let new_bin = {
+        let st = Command::new("tar").arg("-xzf").arg(&tar).arg("-C").arg(&dir).status().map_err(|e| e.to_string())?;
+        if !st.success() {
+            return Err(t!("archive illisible").into());
+        }
+        walkdir::WalkDir::new(&dir)
+            .into_iter()
+            .flatten()
+            .find(|e| e.file_name() == "lkatta" && e.file_type().is_file())
+            .map(|e| e.into_path())
+            .ok_or(t!("binaire absent de l'archive"))?
+    };
+    let out = crate::hote::commande(&new_bin).arg("version").output().map_err(|e| t!("nouveau binaire inutilisable : {}", e))?;
     if !String::from_utf8_lossy(&out.stdout).contains(&rel.version) {
         return Err(t!("le nouveau binaire ne donne pas la version attendue").into());
     }
-    let tmp = bin.with_extension("new");
-    std::fs::copy(&new_bin, &tmp).map_err(|e| e.to_string())?;
-    // Garde l'ancien pour revenir en arrière.
-    let _ = std::fs::copy(&bin, bin.with_extension("ancien"));
-    std::fs::rename(&tmp, &bin).map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    {
+        let tmp = bin.with_file_name("lkatta.nouveau.exe");
+        let ancien = bin.with_file_name("lkatta.ancien.exe");
+        std::fs::copy(&new_bin, &tmp).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_file(&ancien);
+        // Un .exe ouvert ne s'écrase pas directement mais se renomme sans heurt sous NTFS.
+        let _ = std::fs::rename(&bin, &ancien);
+        if let Err(e) = std::fs::rename(&tmp, &bin) {
+            let _ = std::fs::rename(&ancien, &bin);
+            return Err(e.to_string());
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let tmp = bin.with_extension("new");
+        std::fs::copy(&new_bin, &tmp).map_err(|e| e.to_string())?;
+        // Garde l'ancien pour revenir en arrière.
+        let _ = std::fs::copy(&bin, bin.with_extension("ancien"));
+        std::fs::rename(&tmp, &bin).map_err(|e| e.to_string())?;
+    }
     let _ = std::fs::remove_dir_all(&dir);
     Ok(rel.version.clone())
 }
@@ -234,6 +273,20 @@ fn install_appimage(rel: &Release, bin: &std::path::Path) -> Result<String, Stri
 /// Relance le maki avec le nouveau binaire.
 pub fn restart() {
     let bin = installed_bin();
+    #[cfg(windows)]
+    {
+        use base64::Engine;
+        let script = format!("Start-Sleep -Milliseconds 1500; Start-Process -FilePath '{}'", bin.to_string_lossy().replace('\'', "''"));
+        let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let enc = base64::engine::general_purpose::STANDARD.encode(utf16);
+        let _ = crate::hote::commande("powershell")
+            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", &enc])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    }
+    #[cfg(not(windows))]
     let _ = Command::new("sh")
         .args(["-c", &format!("sleep 1.5; APPIMAGELAUNCHER_DISABLE=1 exec setsid {} >/dev/null 2>&1", bin.display())])
         .stdin(Stdio::null())

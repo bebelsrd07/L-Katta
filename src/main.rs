@@ -1,4 +1,5 @@
-//! L Katta (Lemur Kata) — un petit maki assistant de bureau pour Linux/KDE.
+//! L Katta (Lemur Kata) — un petit maki assistant de bureau.
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 #[macro_use]
 mod lang;
@@ -202,6 +203,16 @@ fn traduire_lignes(s: &str) -> String {
 }
 
 fn main() {
+    #[cfg(windows)]
+    {
+        crate::os::win::activer_dpi();
+        if let Some(dir) = crate::paths::self_exe().parent() {
+            let _ = std::fs::remove_file(dir.join("lkatta.ancien.exe"));
+        }
+        if std::env::args_os().nth(1).is_some() {
+            crate::os::win::attacher_console();
+        }
+    }
     // Langue d'abord (sans créer de config.toml pour une simple commande d'aide).
     lang::regler("auto");
     if paths::config_file().exists() {

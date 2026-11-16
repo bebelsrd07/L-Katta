@@ -36,6 +36,10 @@ pub fn systeme() -> &'static str {
             }
         }
     }
+    #[cfg(windows)]
+    if let Some(loc) = crate::os::win::langue_systeme() {
+        return if loc.to_lowercase().starts_with("fr") { "fr" } else { "en" };
+    }
     "en"
 }
 
