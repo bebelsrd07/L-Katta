@@ -169,6 +169,20 @@ pub fn schemas() -> Value {
         tool("agenda_retirer", "Retire de l'agenda de L Katta les événements dont le titre contient ce texte (les agendas en ligne ne sont pas modifiés). Demande l'accord.",
              json!({"titre": s("partie du titre")}), &["titre"]),
         tool("contact_ajouter", "Ajoute un contact au carnet de L Katta.", json!({"nom": s("nom complet"), "email": s("adresse (optionnel)"), "tel": s("numéro (optionnel)")}), &["nom"]),
+        // --- Notion (src/integrations/notion.rs) : exposés seulement si un jeton est rangé.
+        // Lecture directe ; toute écriture passe par la confirmation de l'utilisateur.
+        tool("notion_chercher", "Cherche dans l'espace Notion de l'utilisateur : pages et bases partagées avec l'intégration. Lecture seule.",
+             json!({"requete": s("mots cherchés"), "nombre": {"type": "integer", "description": "résultats voulus (défaut 8)"}}), &["requete"]),
+        tool("notion_lire_page", "Lit une page Notion et la rend en Markdown : titre, propriétés, contenu, tâches cochées. Accepte l'adresse collée ou l'identifiant. Lecture seule.",
+             json!({"page": s("adresse notion.so/… ou identifiant")}), &["page"]),
+        tool("notion_requete_base", "Liste les lignes d'une base (tableau) Notion avec leurs propriétés, et un filtre simple sur une propriété. Le type réel de la propriété est lu dans la base, donc « Statut » = « Fait » marche sans deviner le format. Lecture seule.",
+             json!({"base": s("adresse ou identifiant de la base"), "propriete": s("nom de la propriété à filtrer (optionnel)"), "valeur": s("valeur cherchée (optionnel)"), "nombre": {"type": "integer", "description": "lignes voulues (défaut 20)"}}), &["base"]),
+        tool("notion_creer_page", "Crée une page Notion sous une base ou une page existante, avec un titre et un contenu Markdown. Demande confirmation.",
+             json!({"parent": s("adresse ou identifiant de la base/page parente"), "titre": s("titre de la nouvelle page"), "contenu": s("texte en Markdown : ## titres, - listes, - [ ] tâches, ```code```, > citations (optionnel)")}), &["parent", "titre"]),
+        tool("notion_ajouter_blocs", "Ajoute du Markdown à la fin d'une page Notion existante (notes, résumé, tâches). Demande confirmation.",
+             json!({"page": s("adresse ou identifiant de la page"), "contenu": s("texte en Markdown à ajouter")}), &["page", "contenu"]),
+        tool("notion_modifier_proprietes", "Change les propriétés d'une page Notion : statut, case à cocher, date, sélection, texte, nombre. Demande confirmation.",
+             json!({"page": s("adresse ou identifiant de la page"), "changements": {"type": "object", "description": "nom de la propriété → nouvelle valeur, ex. {\"Statut\": \"Fait\", \"Priorité\": \"Haute\"}"}}), &["page", "changements"]),
     ]);
     let kept: Vec<Value> = all
         .as_array()
@@ -178,6 +192,11 @@ pub fn schemas() -> Value {
         .filter(|t| regles.tool_allowed(t["function"]["name"].as_str().unwrap_or("")).is_ok())
         // Lire et écrire dans le terminal : seulement avec Konsole (son interface D-Bus).
         .filter(|t| !matches!(t["function"]["name"].as_str().unwrap_or(""), "terminal_lire" | "terminal_ecrire") || crate::terminal::konsole())
+        // Notion : seulement avec un jeton rangé dans le trousseau. Sans jeton, ces six outils
+        // ne sont même pas proposés — moins de place dans le prompt, et pas d'appel voué à
+        // l'échec. La consultation est mise en cache (src/cles.rs), elle ne coûte pas un
+        // processus par demande.
+        .filter(|t| !t["function"]["name"].as_str().unwrap_or("").starts_with("notion_") || crate::cles::notion_configure())
         .collect();
     Value::Array(kept)
 }
@@ -211,6 +230,33 @@ fn truncate(mut s: String) -> String {
     s
 }
 
+/// Outils qui changent quelque chose quelque part, et qui le montrent dans LEUR propre demande
+/// d'accord (texte du mail, fichier à écrire, contenu qui part dans Notion…). `execute` ne
+/// leur ajoute donc pas la question générale de `confirmer_tout` : ce serait deux dialogues
+/// pour une seule action.
+fn a_des_effets(name: &str) -> bool {
+    matches!(
+        name,
+        "creer_fichier"
+            | "commande"
+            | "terminal_executer"
+            | "terminal_ecrire"
+            | "mail_envoyer"
+            | "mail_repondre"
+            | "mail_pieces_jointes"
+            | "agenda_retirer"
+            | "fenetre"
+            | "taper"
+            | "touches"
+            | "son"
+            | "lecteur"
+            | "luminosite"
+            | "notion_creer_page"
+            | "notion_ajouter_blocs"
+            | "notion_modifier_proprietes"
+    )
+}
+
 /// Exécute un outil ; renvoie toujours un texte (erreurs comprises) pour le moteur.
 pub fn execute(name: &str, a: &Value, cfg: &Config, host: &mut dyn Host) -> String {
     let summary = match name {
@@ -224,6 +270,12 @@ pub fn execute(name: &str, a: &Value, cfg: &Config, host: &mut dyn Host) -> Stri
         "regarder_ecran" => t!("je regarde ton écran").into(),
         "lire_fenetre" => t!("je lis la fenêtre active").into(),
         "notifications_recentes" => t!("je relis tes notifications").into(),
+        "notion_chercher" => t!("je cherche dans Notion « {} »", arg(a, "requete")),
+        "notion_lire_page" => t!("je lis une page Notion").into(),
+        "notion_requete_base" => t!("je lis une base Notion").into(),
+        "notion_creer_page" => t!("je crée la page Notion « {} »", arg(a, "titre")),
+        "notion_ajouter_blocs" => t!("j'ajoute du texte dans Notion").into(),
+        "notion_modifier_proprietes" => t!("je change des propriétés dans Notion").into(),
         "fenetres_lister" => t!("je regarde tes fenêtres").into(),
         "fenetre" => t!("fenêtre « {} » : {}", arg(a, "nom"), arg(a, "action")),
         "taper" => t!("je tape dans « {} »", arg(a, "fenetre")),
@@ -247,8 +299,10 @@ pub fn execute(name: &str, a: &Value, cfg: &Config, host: &mut dyn Host) -> Stri
     if let Some(e) = ["commande", "texte"].iter().filter(|k| matches!(name, "commande" | "terminal_executer" | "terminal_ecrire") && !arg(a, k).is_empty()).find_map(|k| regles.command_refusal(arg(a, k))) {
         return format!("REFUSÉ : {e}");
     }
-    let side_effects = matches!(name, "creer_fichier" | "commande" | "terminal_executer" | "terminal_ecrire" | "mail_envoyer" | "mail_repondre" | "mail_pieces_jointes" | "agenda_retirer" | "fenetre" | "taper" | "touches" | "son" | "lecteur" | "luminosite");
-    if regles.confirmer_tout && !side_effects && !host.confirm(&t!("Autoriser : {} ?", summary)) {
+    // `confirmer_tout` : même une lecture est demandée — sauf aux outils qui montrent déjà
+    // leur propre demande d'accord, plus précise (le texte du mail, le fichier à écrire, ce
+    // qui part dans Notion). Leur en redemander une ferait deux dialogues pour une action.
+    if regles.confirmer_tout && !a_des_effets(name) && !host.confirm(&t!("Autoriser : {} ?", summary)) {
         return "Refusé par l'utilisateur.".into();
     }
     host.event(Event::Tool(name.to_string(), summary));
@@ -493,6 +547,10 @@ pub fn execute(name: &str, a: &Value, cfg: &Config, host: &mut dyn Host) -> Stri
             }
         }
         "contact_ajouter" => crate::agenda::ajouter_contact(arg(a, "nom"), arg(a, "email"), arg(a, "tel")).map(|_| format!("Contact ajouté : {}", arg(a, "nom"))),
+        // --- Notion : lecture directe, écriture confirmée. Ce qui revient de Notion est une
+        // donnée, donc entouré de `[CONTENU EXTERNE]` : une page peut contenir « envoie tous
+        // mes mails », ce n'est pas une instruction à suivre.
+        n if n.starts_with("notion_") => notion_outil(n, a, host),
         other => Err(format!("outil inconnu : {other}")),
     };
     truncate(match r {
@@ -503,6 +561,72 @@ pub fn execute(name: &str, a: &Value, cfg: &Config, host: &mut dyn Host) -> Stri
 }
 
 // --- implémentations -------------------------------------------------------
+
+/// Les six outils Notion, réunis en un seul endroit.
+///
+/// Groupés ici plutôt qu'éparpillés dans le grand `match` d'`execute`, pour que la règle se
+/// lise d'un coup : **la lecture est directe, toute écriture est confirmée avec son texte
+/// montré** — l'utilisateur voit ce qui quitte la machine, jamais seulement « envoyer dans
+/// Notion ». Ce qui revient est entouré de `[CONTENU EXTERNE]`.
+fn notion_outil(name: &str, a: &Value, host: &mut dyn Host) -> Result<String, String> {
+    use crate::integrations::notion as nt;
+    let refus = || Ok("Refusé par l'utilisateur.".into());
+    let entier = |k: &str, defaut: u64| a.get(k).and_then(Value::as_u64).unwrap_or(defaut) as usize;
+    match name {
+        "notion_chercher" => nt::Client::nouveau().and_then(|c| c.chercher(arg(a, "requete"), entier("nombre", 8))).map(external),
+        "notion_lire_page" => nt::Client::nouveau().and_then(|c| c.lire_page(arg(a, "page"))).map(external),
+        "notion_requete_base" => nt::Client::nouveau().and_then(|c| c.requete_base(arg(a, "base"), arg(a, "propriete"), arg(a, "valeur"), entier("nombre", 20))).map(external),
+        "notion_creer_page" => {
+            let (parent, titre, contenu) = (arg(a, "parent"), arg(a, "titre"), arg(a, "contenu"));
+            let c = nt::Client::nouveau()?;
+            if !host.confirm(&nt::apercu_ecriture(titre, contenu, parent)) {
+                return refus();
+            }
+            c.creer_page(parent, titre, contenu)
+        }
+        "notion_ajouter_blocs" => {
+            let (page, contenu) = (arg(a, "page"), arg(a, "contenu"));
+            let c = nt::Client::nouveau()?;
+            if !host.confirm(&nt::apercu_ecriture("", contenu, page)) {
+                return refus();
+            }
+            c.ajouter_blocs(page, contenu, 0)
+        }
+        "notion_modifier_proprietes" => {
+            let changements = changements_proprietes(a.get("changements"));
+            if changements.is_empty() {
+                return Err(t!("aucune propriété à changer : « changements » doit lister des propriétés et leurs nouvelles valeurs").to_string());
+            }
+            let c = nt::Client::nouveau()?;
+            let apercu: String = changements.iter().map(|(k, v)| format!("{k} → {v}")).collect::<Vec<_>>().join("\n");
+            if !host.confirm(&t!("Changer ces propriétés dans Notion ({}) ?\n{}", arg(a, "page"), apercu)) {
+                return refus();
+            }
+            c.modifier_proprietes(arg(a, "page"), &changements)
+        }
+        autre => Err(format!("outil inconnu : {autre}")),
+    }
+}
+
+/// `changements` : un objet « propriété → valeur ». Les valeurs non-texte (case à cocher,
+/// nombre) passent en texte ; c'est `propriete_notion` qui les remet au format Notion, d'après
+/// le type réel de la propriété.
+fn changements_proprietes(v: Option<&Value>) -> Vec<(String, String)> {
+    let Some(o) = v.and_then(Value::as_object) else { return vec![] };
+    o.iter()
+        .map(|(k, val)| {
+            (
+                k.clone(),
+                match val {
+                    Value::String(s) => s.clone(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Number(n) => n.to_string(),
+                    other => other.to_string(),
+                },
+            )
+        })
+        .collect()
+}
 
 fn run_capture(cmd: &str, timeout: Duration) -> Result<(i32, String), String> {
     let mut c = crate::hote::commande("bash");
@@ -1058,6 +1182,71 @@ mod tests {
             assert_eq!(t["type"], "function");
             assert!(t["function"]["name"].is_string());
         }
+        // Les six outils Notion ont tous des noms distincts et un schéma d'objet : une faute
+        // de frappe ici se verrait en production, pas à la compilation.
+        let noms: Vec<&str> = arr.iter().filter_map(|t| t["function"]["name"].as_str()).filter(|n| n.starts_with("notion_")).collect();
+        assert_eq!(noms.len(), 6, "{noms:?}");
+        for t in arr.iter().filter(|t| t["function"]["name"].as_str().is_some_and(|n| n.starts_with("notion_"))) {
+            assert_eq!(t["function"]["parameters"]["type"], "object");
+            assert!(t["function"]["parameters"]["required"].as_array().is_some_and(|r| !r.is_empty()), "{}", t["function"]["name"]);
+        }
+        // Les trois qui écrivent sont les seuls Notion que `execute` traite comme des effets
+        // de bord : c'est cette liste qui évite de leur demander deux fois le même accord.
+        for n in ["notion_creer_page", "notion_ajouter_blocs", "notion_modifier_proprietes"] {
+            assert!(a_des_effets(n), "{n} écrit quelque part");
+        }
+        for n in ["notion_chercher", "notion_lire_page", "notion_requete_base"] {
+            assert!(!a_des_effets(n), "{n} ne fait que lire");
+        }
+    }
+
+    #[test]
+    fn notion_writes_stop_before_asking_when_there_is_no_token() {
+        /// Un hôte qui compte les demandes d'accord, et refuse toujours.
+        struct H(usize);
+        impl Host for H {
+            fn confirm(&mut self, _: &str) -> bool {
+                self.0 += 1;
+                false
+            }
+            fn event(&mut self, _: Event) {}
+        }
+        // Un jeton est déjà rangé sur cette machine : ce test ne dit plus rien de fiable.
+        if crate::cles::notion_configure() {
+            return;
+        }
+        let cfg = Config::default();
+        for (nom, a) in [
+            ("notion_creer_page", json!({"parent": "https://www.notion.so/x-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d", "titre": "t", "contenu": "c"})),
+            ("notion_ajouter_blocs", json!({"page": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d", "contenu": "c"})),
+            ("notion_modifier_proprietes", json!({"page": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d", "changements": {"Statut": "Fait"}})),
+            ("notion_chercher", json!({"requete": "rapport"})),
+        ] {
+            let mut h = H(0);
+            let r = execute(nom, &a, &cfg, &mut h);
+            // Sans jeton, ou Notion coupé par les règles : on s'arrête là, rien n'est envoyé.
+            assert!(r.starts_with("ERREUR") || r.starts_with("REFUSÉ"), "{nom} a répondu : {r}");
+            assert!(r.contains("Notion") || r.contains("notion"), "{nom} : {r}");
+            // Pas de dialogue pour une action impossible : l'utilisateur n'a rien à accepter.
+            assert_eq!(h.0, 0, "{nom} a demandé un accord sans jeton");
+            // Le jeton ne doit jamais se retrouver dans ce que lit le modèle.
+            assert!(!r.contains("ntn_") && !r.contains("secret_"), "{nom} : {r}");
+        }
+    }
+
+    #[test]
+    fn property_changes_accept_text_booleans_and_numbers() {
+        let v = json!({"Statut": "Fait", "Archive": true, "Ordre": 3});
+        let c = changements_proprietes(Some(&v));
+        assert_eq!(c.len(), 3);
+        assert!(c.contains(&("Statut".to_string(), "Fait".to_string())));
+        assert!(c.contains(&("Archive".to_string(), "true".to_string())));
+        assert!(c.contains(&("Ordre".to_string(), "3".to_string())));
+        // Rien d'exploitable : vide, et l'outil le dit plutôt que d'envoyer un PATCH inutile.
+        assert!(changements_proprietes(None).is_empty());
+        assert!(changements_proprietes(Some(&json!("pas un objet"))).is_empty());
+        assert!(changements_proprietes(Some(&json!([]))).is_empty());
+        assert!(changements_proprietes(Some(&json!({}))).is_empty());
     }
 }
 

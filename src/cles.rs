@@ -80,6 +80,19 @@ pub fn clear(attrs: &[&str]) {
     cache().lock().map(|mut c| c.clear()).ok();
 }
 
+/// Range un secret en le faisant taper par l'utilisateur : `secret-tool` lit le terminal, donc
+/// rien ne s'affiche et rien ne passe en argument (ni dans `ps`, ni dans l'historique du shell).
+fn store_interactif(label: &str, attrs: &[&str]) -> Result<(), String> {
+    let st = crate::hote::commande("secret-tool")
+        .arg("store")
+        .arg(format!("--label={label}"))
+        .args(attrs)
+        .status()
+        .map_err(|_| t!("secret-tool absent (paquet libsecret)").to_string())?;
+    cache().lock().map(|mut c| c.clear()).ok();
+    if st.success() { Ok(()) } else { Err(t!("jeton non enregistré").into()) }
+}
+
 /// Une clé plausible (pas un texte à remplacer) ?
 pub fn plausible(id: &str, k: &str) -> bool {
     let k = k.trim();
@@ -130,6 +143,52 @@ pub fn set_cle(id: &str, key: &str) -> Result<(), String> {
 
 pub fn remove_cle(id: &str) {
     clear(&["service", "lkatta", "fournisseur", id]);
+}
+
+// --- Jetons d'intégration (Notion…) -----------------------------------------
+// Même règle que les clés d'API : le trousseau du bureau, jamais un fichier de L Katta.
+// Sur Windows ce sera le Credential Manager (src/os) ; les attributs ne changent pas.
+
+/// Attributs du jeton Notion dans le trousseau.
+const NOTION: [&str; 4] = ["service", "lkatta", "integration", "notion"];
+
+/// Jeton Notion de l'utilisateur, s'il est rangé dans le trousseau. Mis en cache comme les
+/// clés d'API : `schemas()` le consulte à chaque demande, il ne faut pas un processus par appel.
+pub fn notion() -> Option<String> {
+    const CLE: &str = "integration:notion";
+    if let Some(v) = cache().lock().ok().and_then(|c| c.get(CLE).cloned()) {
+        return v;
+    }
+    let v = lookup(&NOTION).filter(|k| crate::integrations::notion::jeton_plausible(k));
+    if let Ok(mut c) = cache().lock() {
+        c.insert(CLE.into(), v.clone());
+    }
+    v
+}
+
+/// Range le jeton Notion dans le trousseau (lu sur l'entrée standard par `store`).
+pub fn set_notion(jeton: &str) -> Result<(), String> {
+    let jeton = jeton.trim();
+    if !crate::integrations::notion::jeton_plausible(jeton) {
+        return Err(t!("ce texte ne ressemble pas à un jeton Notion (ntn_… ou secret_…) : vérifie le copier-coller"));
+    }
+    store("L Katta : jeton Notion", &NOTION, jeton)
+}
+
+/// Comme `set_notion`, mais tapé dans le terminal : le jeton ne s'affiche pas et ne reste pas
+/// dans l'historique du shell. C'est ce que fait `lkatta notion` sans argument.
+pub fn set_notion_interactif() -> Result<(), String> {
+    store_interactif("L Katta : jeton Notion", &NOTION)
+}
+
+pub fn remove_notion() {
+    clear(&NOTION);
+}
+
+/// Y a-t-il un jeton Notion ? Pour n'exposer les outils Notion que configurés : moins d'outils
+/// dans le prompt, c'est moins de place et moins de tentations pour le modèle.
+pub fn notion_configure() -> bool {
+    notion().is_some()
 }
 
 /// « sk-or…a1b2 » : pour montrer qu'une clé est enregistrée sans la révéler.

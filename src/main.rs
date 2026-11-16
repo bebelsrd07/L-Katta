@@ -21,6 +21,7 @@ mod fichiers;
 mod film;
 mod fils;
 mod index;
+mod integrations;
 mod inventaire;
 mod flux;
 mod fr;
@@ -88,6 +89,7 @@ Utilisation : lkatta [commande]
   demarrage on|off        lancer le maki à l'ouverture de session (ou non)
   maj                     cherche et installe la dernière version
   compte-mail <adresse>   ajoute un compte mail (mot de passe rangé dans le trousseau)
+  notion [jeton]          jeton Notion (rangé dans le trousseau ; « retirer » l'efface)
   catalogue               rafraîchit les modèles gratuits du moteur intégré
   especes                 les lémuriens au choix (lkatta regle espece indri)
   modeles [n] [filtre]    modèles proposés par le moteur n (défaut 1)
@@ -221,6 +223,7 @@ fn main() {
         }
         "maj" => update_now(),
         "compte-mail" => add_mail_account(args.get(1).map(String::as_str).unwrap_or("")),
+        "notion" => notion_setup(args.get(1).map(String::as_str).unwrap_or("")),
         "catalogue" => {
             match moteur::refresh() {
                 Ok(n) => println!("{}", t!("Catalogue rafraîchi : {} modèles.", n)),
@@ -355,6 +358,44 @@ fn add_mail_account(adresse: &str) -> Result<(), String> {
     mail::store_secret(adresse)?;
     match mail::list(c, true, 3) {
         Ok(l) => println!("{}", t!("Connexion réussie : {} mail(s) non lu(s) récent(s).", l.len())),
+        Err(e) => println!("{}", t!("Enregistré, mais la connexion a échoué : {}", e)),
+    }
+    Ok(())
+}
+
+/// `lkatta notion` : le jeton Notion, dans le trousseau comme les clés d'API et les mots de
+/// passe de comptes. Sans argument il est TAPÉ (secret-tool lit le terminal : rien ne
+/// s'affiche, rien ne reste dans l'historique du shell) ; c'est la voie à préférer.
+fn notion_setup(arg: &str) -> Result<(), String> {
+    match arg.trim() {
+        "" => {
+            println!("{}", t!("Notion › Paramètres › Connexions › Développer ou gérer les intégrations › Nouvelle intégration."));
+            println!("{}", t!("Partage avec cette intégration les pages et bases que L Katta doit pouvoir lire."));
+            println!("{}", t!("Tape le jeton Notion (il va dans le trousseau, jamais dans un fichier) :"));
+            cles::set_notion_interactif()?;
+            verifier_notion()
+        }
+        "retirer" | "supprimer" | "effacer" | "remove" => {
+            cles::remove_notion();
+            println!("{}", t!("Jeton Notion retiré du trousseau : les outils notion_* ne sont plus proposés."));
+            Ok(())
+        }
+        "etat" | "test" => verifier_notion(),
+        jeton => {
+            // Collé en argument : accepté (le panneau de réglages passera par là), mais le shell
+            // le garde dans son historique — l'utilisateur doit le savoir.
+            cles::set_notion(jeton)?;
+            println!("{}", t!("Enregistré. Note : passé en argument, ce jeton reste dans l'historique du shell ; « lkatta notion » sans argument ne l'y met pas."));
+            verifier_notion()
+        }
+    }
+}
+
+/// Teste le jeton qui vient d'être rangé : mieux vaut l'apprendre ici que dans la bulle.
+fn verifier_notion() -> Result<(), String> {
+    match integrations::notion::Client::nouveau().and_then(|c| c.moi()) {
+        Ok(qui) => println!("{}", t!("Connexion réussie : {}", qui)),
+        // Le jeton est rangé quand même : un réseau coupé n'est pas une raison de le perdre.
         Err(e) => println!("{}", t!("Enregistré, mais la connexion a échoué : {}", e)),
     }
     Ok(())

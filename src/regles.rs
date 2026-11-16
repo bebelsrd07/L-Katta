@@ -35,6 +35,9 @@ pub struct Regles {
     pub terminal: bool,
     /// Manipuler l'ordinateur : fenêtres, clavier, son, lecteurs, luminosité.
     pub controle: bool,
+    /// Lire et écrire dans Notion. Coupé, les six outils `notion_*` disparaissent et sont
+    /// refusés — l'interrupteur du panneau écrit ici, donc il est appliqué par le code.
+    pub notion: bool,
     /// Fenêtres où il ne tape jamais rien ni n'envoie de touches (morceau du titre ou de l'application).
     pub fenetres_interdites: Vec<String>,
     /// Combinaisons de touches jamais envoyées, en plus de celles toujours refusées
@@ -63,6 +66,7 @@ impl Default for Regles {
             envoyer_mails: true,
             terminal: true,
             controle: true,
+            notion: true,
             fenetres_interdites: [
                 "keepass", "bitwarden", "1password", "kwalletmanager", "seahorse", "mots de passe", "password",
                 "banque", "bank", "bni", "bfv", "boa madagascar", "paypal", "mvola", "orange money", "airtel money",
@@ -130,6 +134,7 @@ pub fn merge(sys: &Regles, user: &Regles) -> Regles {
         envoyer_mails: sys.envoyer_mails && user.envoyer_mails,
         terminal: sys.terminal && user.terminal,
         controle: sys.controle && user.controle,
+        notion: sys.notion && user.notion,
         fenetres_interdites: union(&sys.fenetres_interdites, &user.fenetres_interdites),
         touches_interdites: union(&sys.touches_interdites, &user.touches_interdites),
     }
@@ -176,7 +181,7 @@ pub fn prompt_block(prenom: &str) -> String {
     if !r.outils_interdits.is_empty() {
         out.push_str(&format!("- Outils désactivés : {}\n", r.outils_interdits.join(", ")));
     }
-    for (ok, what) in [(r.internet, "Internet"), (r.lire_mails, "lecture des mails"), (r.envoyer_mails, "envoi de mails"), (r.terminal, "pilotage du terminal")] {
+    for (ok, what) in [(r.internet, "Internet"), (r.lire_mails, "lecture des mails"), (r.envoyer_mails, "envoi de mails"), (r.terminal, "pilotage du terminal"), (r.notion, "Notion")] {
         if !ok {
             out.push_str(&format!("- {what} : INTERDIT\n"));
         }
@@ -326,6 +331,8 @@ impl Regles {
             "mails" | "mail_lire" => self.lire_mails,
             "mail_envoyer" => self.envoyer_mails,
             "terminal_executer" | "terminal_lire" | "terminal_ecrire" => self.terminal,
+            // Les six outils Notion tombent d'un coup avec l'interrupteur.
+            n if n.starts_with("notion_") => self.notion,
             _ => true,
         };
         if ok { Ok(()) } else { Err(format!("« {name} » est interdit par les règles strictes")) }
@@ -348,6 +355,29 @@ mod tests {
         assert!(r.command_refusal("git push origin main").is_some());
         assert!(r.command_refusal("ls -la").is_none());
         assert!(r.command_refusal("cat ~/.ssh/id_ed25519").is_some());
+    }
+
+    #[test]
+    fn the_notion_switch_cuts_the_six_tools_at_once() {
+        // Allumé par défaut : l'utilisateur n'a rien à faire pour s'en servir.
+        let r = Regles::default();
+        assert!(r.notion);
+        for t in ["notion_chercher", "notion_lire_page", "notion_requete_base", "notion_creer_page", "notion_ajouter_blocs", "notion_modifier_proprietes"] {
+            assert!(r.tool_allowed(t).is_ok(), "{t} devrait passer");
+        }
+        // Coupé : les six tombent, et l'administrateur seul suffit à les couper pour tous.
+        let coupe = merge(&Regles { notion: false, ..Regles::default() }, &Regles::default());
+        assert!(!coupe.notion);
+        assert!(coupe.tool_allowed("notion_chercher").is_err());
+        assert!(coupe.tool_allowed("notion_modifier_proprietes").is_err());
+        // Ce qui n'est pas Notion ne bouge pas.
+        assert!(coupe.tool_allowed("recherche_web").is_ok());
+        // Un outil dont le nom commence pareil n'échappe pas à l'interrupteur.
+        assert!(coupe.tool_allowed("notion_autre_chose").is_err());
+        // Un regles.toml écrit avant l'existence de cet interrupteur le garde allumé :
+        // `#[serde(default)]` comble le champ manquant depuis Default.
+        let ancien: Regles = toml::from_str("internet = true\n").unwrap();
+        assert!(ancien.notion);
     }
 
     #[test]
