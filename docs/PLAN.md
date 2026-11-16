@@ -203,19 +203,44 @@ Toutes sont de l'étape 1, et toutes se traitent par le même moyen que celui d�
 site d'appel à modifier.** Le code Linux reste inchangé, ce qui est la raison pour laquelle la CI
 Linux reste verte à chaque envoi.
 
-### Une contrainte qui borne l'étape 1
+### Le backend Win32 n'a pas besoin de dépendance nouvelle
+
+C'était la contrainte que je croyais la plus dure, et elle ne l'est pas — autant le dire ici
+parce qu'elle aurait borné toute l'étape 1 à tort.
 
 Le backend Win32 (`UpdateLayeredWindow` pour la bulle, Credential Manager pour les secrets,
-`RegisterHotKey` pour le raccourci global) demande les liaisons `windows` ou `windows-sys`.
-**Ajouter une dépendance modifie `Cargo.lock`, et ce fichier ne peut pas être régénéré d'ici.**
-La CI tourne en `--locked` : un `Cargo.lock` écrit à la main la ferait échouer.
+`RegisterHotKey` pour le raccourci global, `CreateNamedPipeW` pour le canal) passe par des crates
+comme `windows` ou `windows-sys`. Or **ces crates ne font rien d'autre que déclarer les fonctions
+de l'API** : ce sont des blocs `extern "system"` avec un attribut `#[link]`. On peut écrire les
+mêmes blocs soi-même, sans aucune crate :
 
-Deux façons de s'en sortir, à choisir :
+```rust
+#[link(name = "user32")]
+extern "system" {
+    fn RegisterHotKey(fenetre: isize, id: i32, modificateurs: u32, touche: u32) -> i32;
+}
+```
 
-1. Lancer `cargo add windows-sys --features …` localement, une seule fois, et m'envoyer le
-   `Cargo.lock` résultant. C'est la plus sûre.
-2. Que je recalcule le `Cargo.lock` à la main depuis les index de crates.io. Faisable mais
-   fragile, et une erreur se paierait en cycles de CI plutôt qu'en secondes.
+`kernel32`, `user32` et `advapi32` sont des bibliothèques du système, présentes sur toute
+installation de Windows : l'attribut `#[link]` dit à l'éditeur de liens de les prendre, et il n'y
+a rien à télécharger. **Le `Cargo.lock` ne bouge donc pas**, ce qui lève la contrainte — il ne
+pouvait pas être régénéré d'ici, cargo y est absent et la CI tourne en `--locked`.
 
-En attendant, tout ce qui peut se faire **sans** dépendance nouvelle est fait — c'est le cas du
-socle entier, `std::os::windows::*` étant dans la bibliothèque standard.
+Ce que ça coûte en échange, et il faut le savoir avant de choisir :
+
+- C'est du `unsafe` qu'on possède. Chaque signature doit être exacte : une déclaration fausse ne
+  se voit pas à la compilation, elle se voit à l'exécution, et `cargo check` sous Windows ne
+  vérifie que les types Rust, pas l'ABI.
+- Il n'y a pas de mise à jour automatique quand Microsoft change une signature (rare, mais ça
+  arrive).
+- Les constantes (`WS_EX_LAYERED`, `GENERIC_WRITE`…) doivent être recopiées à la main.
+
+Pour quelques dizaines de fonctions, c'est un coût acceptable et c'est ce que fait ce projet
+partout ailleurs : `libc::prctl` et `libc::setsid` sont déjà des appels directs, et le socle
+`src/os/` les a rangés derrière des fonctions sûres. Les déclarations Win32 iront au même
+endroit, avec les mêmes règles — une fonction sûre par besoin, le `unsafe` confiné dedans, et un
+`SAFETY:` qui dit pourquoi c'est juste.
+
+Si tu préfères la crate malgré tout, la marche à suivre est courte : lancer
+`cargo add windows-sys --features Win32_Foundation,Win32_UI_WindowsAndMessaging,…` une fois en
+local et m'envoyer le `Cargo.lock` résultant. Je ne peux pas le faire d'ici.
