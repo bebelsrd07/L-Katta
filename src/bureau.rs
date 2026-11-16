@@ -97,6 +97,9 @@ pub fn retirer_script() {
     let _ = qdbus(&["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", "lkatta"]);
 }
 
+/// Le service D-Bus que le script KWin appelle pour dire quelle fenêtre est active.
+/// Linux seulement : `zbus` n'est plus une dépendance que pour cette cible.
+#[cfg(target_os = "linux")]
 struct Service {
     tx: Box<dyn Fn(Msg) + Send + Sync>,
 }
@@ -110,6 +113,7 @@ pub fn pont_actif() -> bool {
     PONT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+#[cfg(target_os = "linux")]
 #[zbus::interface(name = "org.lkatta.Maki")]
 impl Service {
     /// La fenêtre active, en JSON (KWin envoie les nombres entiers en `int` : un seul texte
@@ -124,6 +128,7 @@ impl Service {
 }
 
 /// Démarre le service D-Bus (fil dédié) puis charge le script KWin.
+#[cfg(target_os = "linux")]
 pub fn demarrer(tx: impl Fn(Msg) + Send + Sync + 'static) {
     std::thread::spawn(move || {
         let r: zbus::Result<()> = zbus::block_on(async move {
@@ -144,6 +149,22 @@ pub fn demarrer(tx: impl Fn(Msg) + Send + Sync + 'static) {
         }
     });
 }
+
+/// Démarre la veille de la fenêtre active.
+///
+/// Sous Linux c'est le bureau qui pousse l'information (script KWin, extension GNOME) par
+/// D-Bus. Ici rien ne pousse : il faudra interroger Windows. Le natif est `GetForegroundWindow`
+/// puis `GetWindowTextW` / `GetClassNameW`, dans un fil qui sonde et n'envoie `Msg::Fenetre` que
+/// quand la fenêtre change — quelques dizaines de lignes, sans dépendance nouvelle, comme le
+/// reste du backend Win32.
+///
+/// En attendant ce n'est pas lancé, et `pont_actif` reste faux. C'est voulu : la conséquence est
+/// visible et honnête — la discrétion de L Katta, qui baisse le ton quand l'utilisateur est en
+/// visioconférence ou sur une fenêtre précise, ne s'applique pas encore sous Windows. Prétendre
+/// le contraire en renvoyant une fenêtre vide ferait croire à L Katta que l'utilisateur ne fait
+/// rien, donc parler quand il faut se taire.
+#[cfg(not(target_os = "linux"))]
+pub fn demarrer(_tx: impl Fn(Msg) + Send + Sync + 'static) {}
 
 // --- raccourci global (KGlobalAccel) ----------------------------------------------------
 

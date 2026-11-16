@@ -35,10 +35,25 @@ mod flux;
 mod fr;
 mod install;
 mod ipc;
+// Le protocole de commande (les lignes, leur analyse) est dans `ipc`, portable. Le tuyau en
+// dessous ne l'est pas : socket Unix d'un côté, tube nommé de l'autre.
+#[cfg(target_os = "linux")]
+mod transport;
+#[cfg(not(target_os = "linux"))]
+#[path = "transport_win.rs"]
+mod transport;
 mod kde;
 mod mail;
 mod maj;
 mod markdown;
+// Sous Linux, le maki est affiché par Wayland (layer-shell) ou X11. Ailleurs, `mascot_win` prend
+// le relais : une fenêtre Win32 en calques. Le nom du module reste `crate::mascot`, donc rien
+// d'autre ne change — et les quatre sous-modules qui font le maki lui-même (comportement, dessin,
+// espèces, interface, 5 730 lignes) sont les mêmes fichiers des deux côtés.
+#[cfg(target_os = "linux")]
+mod mascot;
+#[cfg(not(target_os = "linux"))]
+#[path = "mascot_win/mod.rs"]
 mod mascot;
 mod afaire;
 mod agenda;
@@ -316,6 +331,9 @@ fn main() {
             Some("retirer") | Some("remove") => gnome::retirer().map(|m| println!("{m}")),
             _ => gnome::installer().map(|m| println!("{m}")),
         },
+        // Essai du backend X11 : il n'existe que sous Linux, et sur un autre système la commande
+        // tombe dans le bras par défaut, qui dit qu'elle est inconnue.
+        #[cfg(target_os = "linux")]
         "x11-essai" => {
             let capture = args.iter().position(|a| a == "--capture").and_then(|i| args.get(i + 1)).map(String::as_str);
             let duree = args.iter().position(|a| a == "--duree").and_then(|i| args.get(i + 1)).and_then(|d| d.parse().ok()).unwrap_or(8.0);

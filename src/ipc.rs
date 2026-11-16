@@ -1,9 +1,9 @@
-//! Petit protocole texte sur socket Unix entre la ligne de commande / le panneau et le démon.
-
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
-
-use crate::paths;
+//! Petit protocole texte entre la ligne de commande / le panneau et le démon.
+//!
+//! Ce module ne contient que le protocole : les messages, et l'analyse des lignes qui les
+//! portent. Le tuyau, lui, est dans `crate::transport` — socket Unix sous Linux, tube nommé sous
+//! Windows — choisi par une `cfg` dans `main.rs`. Les deux transports parlent en lignes de texte,
+//! donc ce module n'a pas à savoir lequel est en dessous.
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Msg {
@@ -83,51 +83,27 @@ pub fn parse(line: &str) -> Option<Msg> {
     })
 }
 
-/// Écoute le socket (bloquant, à lancer dans un fil).
+/// Écoute les commandes (bloquant, à lancer dans un fil).
+///
+/// Une ligne comprise est appliquée et reçoit « ok » ; une ligne inconnue reçoit le message
+/// d'erreur, que la ligne de commande affiche tel quel.
 pub fn listen(on_msg: impl Fn(Msg) + Send + 'static) -> std::io::Result<()> {
-    let path = paths::socket_file();
-    std::fs::create_dir_all(path.parent().unwrap())?;
-    let _ = std::fs::remove_file(&path);
-    let listener = UnixListener::bind(&path)?;
-    crate::os::restreindre_fichier(&path)?;
-    std::thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            let mut w = match stream.try_clone() {
-                Ok(w) => w,
-                Err(_) => continue,
-            };
-            let mut line = String::new();
-            // Un client muet ou bavard ne bloque pas les suivants : 2 s et 64 Ko au plus.
-            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
-            use std::io::Read;
-            if BufReader::new(stream.take(64 * 1024)).read_line(&mut line).is_ok() {
-                match parse(&line) {
-                    Some(m) => {
-                        on_msg(m);
-                        let _ = w.write_all(b"ok\n");
-                    }
-                    None => {
-                        let _ = w.write_all(format!("{}\n", t!("commande inconnue")).as_bytes());
-                    }
-                }
-            }
+    crate::transport::ecouter(move |ligne| match parse(ligne) {
+        Some(m) => {
+            on_msg(m);
+            "ok\n".to_string()
         }
-    });
-    Ok(())
+        None => format!("{}\n", t!("commande inconnue")),
+    })
 }
 
 /// Envoie une commande au démon. Erreur si le démon ne tourne pas.
 pub fn send(line: &str) -> std::io::Result<String> {
-    let mut s = UnixStream::connect(paths::socket_file())?;
-    s.write_all(line.replace('\n', " ").as_bytes())?;
-    s.write_all(b"\n")?;
-    let mut out = String::new();
-    BufReader::new(s).read_line(&mut out)?;
-    Ok(out.trim().to_string())
+    crate::transport::envoyer(line)
 }
 
 pub fn daemon_running() -> bool {
-    UnixStream::connect(paths::socket_file()).is_ok()
+    crate::transport::present()
 }
 
 #[cfg(test)]
