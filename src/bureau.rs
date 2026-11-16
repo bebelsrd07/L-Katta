@@ -255,7 +255,7 @@ mod win {
         fn GetWindowRect(fenetre: isize, r: *mut Rect) -> i32;
         fn IsIconic(fenetre: isize) -> i32;
         fn MonitorFromWindow(fenetre: isize, drapeaux: u32) -> isize;
-        fn GetMonitorInfoW(moniteur: isize, info: *mut InfoMoniteur) -> i32;
+        fn GetMonitorInfoW(moniteur: isize, info: *mut std::ffi::c_void) -> i32;
     }
 
     /// Démarre le fil de sondage. Comme le service D-Bus de Linux, il ne revient pas.
@@ -333,7 +333,7 @@ mod win {
         // garantit un handle valable même si la fenêtre est hors écran.
         let m = unsafe { MonitorFromWindow(f, MONITOR_DEFAULTTONEAREST) };
         // SAFETY : `info` est à nous et vit jusqu'à la fin de l'appel.
-        if m == 0 || unsafe { GetMonitorInfoW(m, &mut info) } == 0 {
+        if m == 0 || unsafe { GetMonitorInfoW(m, &mut info as *mut InfoMoniteur as *mut std::ffi::c_void) } == 0 {
             // Sans renseignement sur le moniteur, mieux vaut dire « pas plein écran » : se taire à
             // tort est plus gênant que parler à tort.
             return false;

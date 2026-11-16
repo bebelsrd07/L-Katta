@@ -102,6 +102,12 @@ unsafe extern "system" {
     fn LoadCursorW(instance: isize, nom: *const u16) -> isize;
     fn RegisterHotKey(fenetre: isize, id: i32, modifiers: u32, vk: u32) -> i32;
     fn UnregisterHotKey(fenetre: isize, id: i32) -> i32;
+    fn DestroyIcon(icon: isize) -> i32;
+    fn RegisterWindowMessageW(name: *const u16) -> u32;
+    fn CreatePopupMenu() -> isize;
+    fn AppendMenuW(menu: isize, flags: u32, id: usize, text: *const u16) -> i32;
+    fn TrackPopupMenu(menu: isize, flags: u32, x: i32, y: i32, reserved: i32, window: isize, rect: *const c_void) -> u32;
+    fn DestroyMenu(menu: isize) -> i32;
 }
 
 #[link(name = "shell32")]
@@ -109,6 +115,7 @@ unsafe extern "system" {
     fn DragAcceptFiles(fenetre: isize, accepte: i32);
     fn DragQueryFileW(drop: isize, index: u32, buffer: *mut u16, taille: u32) -> u32;
     fn DragFinish(drop: isize);
+    fn Shell_NotifyIconW(message: u32, data: *mut NotifyIconData) -> i32;
 }
 
 #[link(name = "gdi32")]
@@ -123,6 +130,13 @@ unsafe extern "system" {
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn GetModuleHandleW(nom: *const u16) -> isize;
+}
+
+#[repr(C)]
+struct NotifyIconData {
+    size: u32, hwnd: isize, id: u32, flags: u32, callback: u32, icon: isize,
+    tip: [u16; 128], state: u32, state_mask: u32, info: [u16; 256], timeout: u32,
+    info_title: [u16; 64], info_flags: u32, guid: [u8; 16], balloon_icon: isize,
 }
 
 #[repr(C)]
@@ -240,6 +254,7 @@ const WM_KILLFOCUS: u32 = 0x0008;
 const WM_APPLIQUER_CLAVIER: u32 = 0x8001;
 const WM_REGLER_RACCOURCI: u32 = 0x8002;
 const WM_HOTKEY: u32 = 0x0312;
+const WM_TRAY: u32 = 0x8003;
 const WM_DROPFILES: u32 = 0x0233;
 const WM_KEYDOWN: u32 = 0x0100;
 const WM_CHAR: u32 = 0x0102;
@@ -300,6 +315,8 @@ thread_local! {
     /// `thread_local` et non une variable globale : la boucle de messages et le rappel sont sur le
     /// même fil, donc il n'y a jamais deux accès simultanés, et aucun verrou à prendre.
     static ETAT: RefCell<Option<Etat>> = const { RefCell::new(None) };
+    static TRAY: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
+    static TASKBAR_CREATED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 /// Lance le maki et ne revient qu'à sa fermeture.
@@ -369,6 +386,10 @@ pub fn run(cfg: Config, rx: crate::os::canal::Recepteur<Msg>) -> Result<(), Stri
         capture: false,
         en_attente: Vec::new(),
         etait_occupe: false,
+        absent: false,
+        cout_image: 0.004,
+        intervalle: MILLIS_PAR_IMAGE,
+        dernier_glisser: Instant::now(),
         derniere_parole: None,
         place: false,
         derniere: Instant::now(),
@@ -440,6 +461,10 @@ pub fn run(cfg: Config, rx: crate::os::canal::Recepteur<Msg>) -> Result<(), Stri
 
     // Enregistre le raccourci après création et accepte les fichiers déposés sur la fenêtre.
     unsafe { DragAcceptFiles(fenetre, 1) };
+    let icon = crate::os::win::icone_depuis_pixmap(&crate::install::icon(32));
+    TRAY.with(|t| t.set(icon));
+    TASKBAR_CREATED.with(|t| t.set(unsafe { RegisterWindowMessageW(large("TaskbarCreated").as_ptr()) }));
+    tray_add(fenetre, icon);
     avec_etat(|a| regler_raccourci(fenetre, &a.cfg.maki.raccourci));
 
     // SAFETY : minuteur de fenêtre, sans rappel : c'est WM_TIMER qui passera par `procedure`.
@@ -467,6 +492,8 @@ pub fn run(cfg: Config, rx: crate::os::canal::Recepteur<Msg>) -> Result<(), Stri
         }
     }
 
+    tray_delete(fenetre);
+    TRAY.with(|t| { let icon = t.replace(0); if icon != 0 { unsafe { DestroyIcon(icon) }; } });
     // SAFETY : le minuteur, le bitmap et le DC ont été créés ici, et la fenêtre va disparaître.
     unsafe {
         KillTimer(fenetre, ID_MINUTEUR);
@@ -488,9 +515,14 @@ pub fn run(cfg: Config, rx: crate::os::canal::Recepteur<Msg>) -> Result<(), Stri
 /// Le rappel de fenêtre. Tout y est court : le travail est dans `Etat`, emprunté le temps d'un
 /// appel, jamais gardé.
 unsafe extern "system" fn procedure(fenetre: isize, message: u32, w: usize, l: isize) -> isize {
+    if message != 0 && TASKBAR_CREATED.with(|t| t.get() == message) {
+        TRAY.with(|t| tray_add(fenetre, t.get()));
+        return 0;
+    }
     match message {
         WM_TIMER => {
             avec_etat(|a| a.tic());
+            for (title, text) in crate::os::win::prendre_notifications() { tray_notification(fenetre, &title, &text); }
             0
         }
         WM_MOUSEMOVE => {
@@ -581,6 +613,24 @@ unsafe extern "system" fn procedure(fenetre: isize, message: u32, w: usize, l: i
                     _ => a.maki.flip(),
                 }
             });
+            0
+        }
+        WM_TRAY => {
+            match l as u32 & 0xffff {
+                WM_LBUTTONUP => avec_etat(|a| a.basculer_chat()),
+                WM_RBUTTONUP => {
+                    let choix = tray_menu(fenetre);
+                    avec_etat(|a| match choix {
+                        1 => a.basculer_chat(),
+                        2 => { if !a.chat.open { a.basculer_chat(); } a.chat.open_settings(0); },
+                        3 => a.message(Msg::Quiet(None)),
+                        4 => a.message(Msg::Hide(None)),
+                        5 => a.message(Msg::Quit),
+                        _ => {},
+                    });
+                }
+                _ => {}
+            }
             0
         }
         WM_HOTKEY if w == 1 => {
@@ -734,6 +784,10 @@ struct Etat {
     en_attente: Vec<Message>,
     /// Il était occupé à l'image précédente : la transition libère ce qui attendait.
     etait_occupe: bool,
+    absent: bool,
+    cout_image: f32,
+    intervalle: u32,
+    dernier_glisser: Instant,
     /// Dernière parole spontanée, pour respecter l'intervalle `parole_min`.
     derniere_parole: Option<Instant>,
     derniere: Instant,
@@ -747,6 +801,11 @@ impl Etat {
         self.derniere = maintenant;
 
         self.lire_le_demon();
+        let absent = crate::os::win::inactif_ms() >= 10 * 60 * 1000;
+        if self.absent && !absent && !self.occupe() {
+            self.liberer_attente(t!("Pendant ton absence"));
+        }
+        self.absent = absent;
         self.sonder();
         if self.accueil_a.is_some_and(|a| Instant::now() >= a) && !self.occupe() && !self.cache {
             self.accueil_a = None;
@@ -757,10 +816,19 @@ impl Etat {
         self.maki.step(dt, ctx);
         // La taille et la place dépendent de ce qu'il faut dessiner, donc de la pose : elles
         // viennent après le pas d'animation, comme dans la version Linux.
+        let debut = Instant::now();
         self.ajuster();
         self.placer();
         self.peindre();
         self.presenter();
+        let cout = debut.elapsed().as_secs_f32().min(0.1);
+        self.cout_image = self.cout_image * 0.9 + cout * 0.1;
+        let voulu: u32 = if self.cache { 500 } else if self.traine { 16 } else if self.maki.busy() { 33 } else if self.chat.open { 120 } else { 90 };
+        let intervalle = voulu.max((self.cout_image * 4000.0).ceil() as u32).clamp(16, 500);
+        if intervalle != self.intervalle {
+            self.intervalle = intervalle;
+            unsafe { SetTimer(self.fenetre, ID_MINUTEUR, intervalle, 0) };
+        }
     }
 
     /// Vide le canal. Tout ce qui arrive d'un coup est traité : le démon peut envoyer plusieurs
@@ -780,7 +848,7 @@ impl Etat {
             // Une remarque spontanée est soumise à la discrétion et à l'intervalle entre paroles.
             Msg::Hint(t) => self.spontane(Message::new(Kind::Info, "", t)),
             // Occupé : astuces, nouvelles et mails attendent la fin ; les rappels passent.
-            Msg::Bubble(m, _) if self.occupe() && matches!(m.kind, Kind::Mail | Kind::News | Kind::Tip | Kind::Alert) => {
+            Msg::Bubble(m, _) if (self.occupe() || self.absent) && matches!(m.kind, Kind::Mail | Kind::News | Kind::Tip | Kind::Alert) => {
                 self.mettre_de_cote(m)
             }
             Msg::Bubble(m, true) => self.montrer(m),
@@ -830,7 +898,7 @@ impl Etat {
         Ctx {
             w: self.monde.0,
             h: self.monde.1,
-            night: nuit,
+            night: nuit || self.absent,
             day: (6..18).contains(&heure),
             quiet: self.quiet || self.occupe(),
             acrobatics: self.cfg.maki.acrobaties,
@@ -1086,12 +1154,16 @@ impl Etat {
             unsafe { TrackMouseEvent(&mut e) };
         }
         if self.traine {
-            self.maki.drag_to(monde, MILLIS_PAR_IMAGE as f32 / 1000.0);
+            let maintenant = Instant::now();
+            let dt = maintenant.duration_since(self.dernier_glisser).as_secs_f32().clamp(0.001, 0.1);
+            self.dernier_glisser = maintenant;
+            self.maki.drag_to(monde, dt);
         }
     }
 
     fn prendre(&mut self) {
         if let Some(p) = self.pointeur {
+            self.dernier_glisser = Instant::now();
             self.maki.grab(p);
             self.traine = true;
         }
@@ -1535,7 +1607,7 @@ impl Etat {
         // Fin d'une visioconférence, d'une présentation ou d'un plein écran : ce qui avait été mis
         // de côté s'affiche maintenant, en une seule bulle.
         let occupe = self.occupe();
-        if self.etait_occupe && !occupe {
+        if self.etait_occupe && !occupe && !self.absent {
             self.liberer_attente(t!("Pendant que tu étais occupé·e"));
         }
         self.etait_occupe = occupe;
@@ -1570,7 +1642,7 @@ impl Etat {
     /// autant, puisque l'occupation, elle, est détectée et met de côté.
     fn spontane(&mut self, m: Message) {
         let ecart = Duration::from_secs(self.cfg.maki.parole_min as u64 * 60);
-        if self.occupe() {
+        if self.occupe() || self.absent {
             self.mettre_de_cote(m);
             return;
         }
@@ -1629,6 +1701,59 @@ impl Etat {
             self.maki.say(espece.presentation(), 3.0);
             self.maki.teleport(&ctx);
         }
+    }
+}
+
+fn tray_data(fenetre: isize) -> NotifyIconData {
+    let mut data: NotifyIconData = unsafe { std::mem::zeroed() };
+    data.size = std::mem::size_of::<NotifyIconData>() as u32;
+    data.hwnd = fenetre;
+    data.id = 1;
+    data
+}
+
+fn copier_large(dst: &mut [u16], text: &str) {
+    let n = dst.len().saturating_sub(1);
+    for (d, c) in dst.iter_mut().take(n).zip(text.encode_utf16()) { *d = c; }
+}
+
+fn tray_add(fenetre: isize, icon: isize) {
+    if icon == 0 { return; }
+    let mut data = tray_data(fenetre);
+    data.flags = 0x01 | 0x02 | 0x04;
+    data.callback = WM_TRAY;
+    data.icon = icon;
+    copier_large(&mut data.tip, "L Katta");
+    unsafe { Shell_NotifyIconW(0, &mut data) };
+}
+
+fn tray_delete(fenetre: isize) {
+    let mut data = tray_data(fenetre);
+    unsafe { Shell_NotifyIconW(2, &mut data) };
+}
+
+fn tray_notification(fenetre: isize, title: &str, text: &str) {
+    let mut data = tray_data(fenetre);
+    data.flags = 0x10;
+    data.info_flags = 1;
+    copier_large(&mut data.info_title, title);
+    copier_large(&mut data.info, text);
+    unsafe { Shell_NotifyIconW(1, &mut data) };
+}
+
+fn tray_menu(fenetre: isize) -> u32 {
+    unsafe {
+        let menu = CreatePopupMenu();
+        if menu == 0 { return 0; }
+        for (id, label) in [(1, t!("Discuter")), (2, t!("Réglages")), (3, t!("Discret")), (4, t!("Cacher")), (5, t!("Quitter"))] {
+            AppendMenuW(menu, 0, id, large(label).as_ptr());
+        }
+        let mut p = POINT { x: 0, y: 0 };
+        GetCursorPos(&mut p);
+        SetForegroundWindow(fenetre);
+        let choix = TrackPopupMenu(menu, 0x0100 | 0x0002, p.x, p.y, 0, fenetre, std::ptr::null());
+        DestroyMenu(menu);
+        choix
     }
 }
 

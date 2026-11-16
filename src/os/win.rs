@@ -168,7 +168,7 @@ unsafe extern "system" {
     fn SetProcessDpiAwarenessContext(value: isize) -> i32;
     fn GetLastInputInfo(info: *mut LastInputInfo) -> i32;
     fn EnumDisplayMonitors(hdc: isize, clip: *const c_void, cb: EnumMonProc, data: isize) -> i32;
-    fn GetMonitorInfoW(hmon: isize, info: *mut MonitorInfoExW) -> i32;
+    fn GetMonitorInfoW(hmon: isize, info: *mut c_void) -> i32;
     fn MonitorFromPoint(pt: Point, flags: u32) -> isize;
     fn GetCursorPos(pt: *mut Point) -> i32;
     fn GetDC(hwnd: isize) -> isize;
@@ -920,7 +920,7 @@ unsafe extern "system" fn collecter_moniteur(hmon: isize, _hdc: isize, _r: *cons
         sz_device: [0; 32],
     };
     // SAFETY : `info` est dimensionné ; `data` pointe vers notre `Vec<Moniteur>` sur la pile.
-    if unsafe { GetMonitorInfoW(hmon, &mut info) } != 0 && info.rc_work.right > info.rc_work.left && info.rc_work.bottom > info.rc_work.top {
+    if unsafe { GetMonitorInfoW(hmon, &mut info as *mut MonitorInfoExW as *mut c_void) } != 0 && info.rc_work.right > info.rc_work.left && info.rc_work.bottom > info.rc_work.top {
         let liste = unsafe { &mut *(data as *mut Vec<Moniteur>) };
         let nom = depuis_utf16_nul(&info.sz_device);
         let nom = nom.trim_start_matches(r"\\.\").to_string();
@@ -958,7 +958,7 @@ pub fn moniteur_du_point(x: i32, y: i32) -> Option<String> {
     // SAFETY : renvoie le moniteur le plus proche et lit son nom.
     unsafe {
         let m = MonitorFromPoint(Point { x, y }, MONITOR_DEFAULTTONEAREST);
-        if m == 0 || GetMonitorInfoW(m, &mut info) == 0 {
+        if m == 0 || GetMonitorInfoW(m, &mut info as *mut MonitorInfoExW as *mut c_void) == 0 {
             return None;
         }
     }
@@ -989,7 +989,7 @@ pub fn capturer_ecran() -> Result<tiny_skia::Pixmap, String> {
     let rect = unsafe {
         let _ = GetCursorPos(&mut pt);
         let m = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
-        if m != 0 && GetMonitorInfoW(m, &mut info) != 0 {
+        if m != 0 && GetMonitorInfoW(m, &mut info as *mut MonitorInfoExW as *mut c_void) != 0 {
             info.rc_monitor
         } else {
             return Err(t!("aucun écran disponible pour la capture").into());
