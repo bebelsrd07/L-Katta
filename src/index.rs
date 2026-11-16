@@ -177,11 +177,7 @@ fn ouvrir() -> rusqlite::Result<Connection> {
          CREATE TABLE IF NOT EXISTS etat(cle TEXT PRIMARY KEY, valeur TEXT);",
     )?;
     // L'index décrit les fichiers de l'utilisateur : lisible par lui seul.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(chemin_base(), std::fs::Permissions::from_mode(0o600));
-    }
+    let _ = crate::os::restreindre_fichier(&chemin_base());
     Ok(c)
 }
 
@@ -191,12 +187,7 @@ fn maintenant() -> i64 {
 
 /// Ce fil passe en priorité minimale : processeur (nice 19) et disque (classe « idle »).
 fn se_faire_discret() {
-    unsafe {
-        let tid = libc::syscall(libc::SYS_gettid) as libc::id_t;
-        libc::setpriority(libc::PRIO_PROCESS, tid, 19);
-        // ioprio_set(IOPRIO_WHO_PROCESS, tid, IOPRIO_CLASS_IDLE << 13)
-        libc::syscall(libc::SYS_ioprio_set, 1, tid as libc::c_long, 3i64 << 13);
-    }
+    crate::os::fil_discret()
 }
 
 fn sauter(nom: &str) -> bool {

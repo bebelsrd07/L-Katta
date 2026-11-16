@@ -89,8 +89,7 @@ pub fn listen(on_msg: impl Fn(Msg) + Send + 'static) -> std::io::Result<()> {
     std::fs::create_dir_all(path.parent().unwrap())?;
     let _ = std::fs::remove_file(&path);
     let listener = UnixListener::bind(&path)?;
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    crate::os::restreindre_fichier(&path)?;
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let mut w = match stream.try_clone() {

@@ -40,6 +40,7 @@ mod memoire;
 mod moteur;
 mod saisie;
 mod sante;
+mod os;
 mod paths;
 mod profile;
 mod regles;

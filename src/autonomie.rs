@@ -273,10 +273,16 @@ mod tests {
         assert!(!fichier_couvert(&projet, &projet.join(".env")));
         assert!(!fichier_couvert(&projet, &projet.join("cles/release.pem")));
         // Un lien symbolique ne fait pas sortir du dossier.
-        std::os::unix::fs::symlink(base.join("ailleurs"), projet.join("lien")).unwrap();
-        assert!(!fichier_couvert(&projet, &projet.join("lien/a.txt")));
-        std::os::unix::fs::symlink(base.join("ailleurs/secret.txt"), projet.join("faux.txt")).unwrap();
-        assert!(!fichier_couvert(&projet, &projet.join("faux.txt")));
+        // Seulement sur Unix : créer un lien sur Windows demande le mode développeur ou des
+        // droits d'administrateur, que n'a pas un runner de CI. La règle, elle, est vérifiée
+        // par les cas ci-dessus, qui ne dépendent pas du système.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(base.join("ailleurs"), projet.join("lien")).unwrap();
+            assert!(!fichier_couvert(&projet, &projet.join("lien/a.txt")));
+            std::os::unix::fs::symlink(base.join("ailleurs/secret.txt"), projet.join("faux.txt")).unwrap();
+            assert!(!fichier_couvert(&projet, &projet.join("faux.txt")));
+        }
         let _ = std::fs::remove_dir_all(&base);
     }
 

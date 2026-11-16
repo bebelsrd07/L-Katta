@@ -82,8 +82,7 @@ pub fn depuis_uri(u: &str) -> Option<PathBuf> {
         out.push(b[i]);
         i += 1;
     }
-    use std::os::unix::ffi::OsStringExt;
-    Some(PathBuf::from(std::ffi::OsString::from_vec(out))).filter(|p| p.is_absolute())
+    Some(PathBuf::from(crate::os::osstring_depuis_octets(out))).filter(|p| p.is_absolute())
 }
 
 /// Liste `text/uri-list` d'un glisser-déposer (lignes `file://…`, commentaires `#` ignorés).

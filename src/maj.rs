@@ -217,9 +217,8 @@ fn install_appimage(rel: &Release, bin: &std::path::Path) -> Result<String, Stri
     download(&rel.sums, &dir.join("SHA256SUMS"))?;
     download(&rel.sig, &dir.join("SHA256SUMS.sig"))?;
     verifier(&dir, &name)?;
-    use std::os::unix::fs::PermissionsExt;
     let new = dir.join(&name);
-    std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+    crate::os::rendre_executable(&new).map_err(|e| e.to_string())?;
     let out = Command::new(&new).arg("version").env("APPIMAGE_EXTRACT_AND_RUN", "1").env("APPIMAGELAUNCHER_DISABLE", "1").output().map_err(|e| t!("nouvelle AppImage inutilisable : {}", e))?;
     if !String::from_utf8_lossy(&out.stdout).contains(&rel.version) {
         return Err(t!("la nouvelle AppImage ne donne pas la version attendue").into());
