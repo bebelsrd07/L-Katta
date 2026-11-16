@@ -18,6 +18,14 @@ mod conseils;
 mod daemon;
 mod environnement;
 mod fichiers;
+// La fenêtre « Ouvrir » du bureau passe par le portail freedesktop, donc par D-Bus, qui n'existe
+// pas ailleurs. `fichiers` garde tout ce qui est portable (le repli, la lecture des fichiers
+// choisis, les URI) et n'appelle que cette fonction-ci, qui a son jumeau.
+#[cfg(target_os = "linux")]
+mod portail;
+#[cfg(not(target_os = "linux"))]
+#[path = "portail_ailleurs.rs"]
+mod portail;
 mod film;
 mod fils;
 mod index;

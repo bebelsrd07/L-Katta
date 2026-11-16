@@ -13,6 +13,8 @@
 //!   n'est pas une raison pour croire un fichier protégé. Chaque fonction dit d'où vient
 //!   vraiment la protection sur ce système.
 
+pub mod canal;
+
 use std::path::Path;
 
 // ── Droits sur les fichiers et dossiers ──────────────────────────────────────

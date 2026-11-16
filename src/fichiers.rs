@@ -4,11 +4,12 @@
 //! Le choix passe par le portail du bureau (`org.freedesktop.portal.FileChooser` : KDE, GNOME,
 //! wlroots… la fenêtre habituelle du système), sinon par zenity, yad ou kdialog. La bulle ne se
 //! fige pas : le choix tourne dans un fil.
+//!
+//! L'appel au portail vit dans `portail.rs`, qui a un jumeau hors Linux : c'est le seul endroit
+//! de ce module qui parle D-Bus. Tout le reste — le repli, la lecture des fichiers choisis, le
+//! décodage des URI — est portable et reste ici.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-
-use zbus::{OwnedObjectPath, OwnedVariant as OwnedValue, Variant as Value};
 
 /// Pièces jointes à une question : 8 au plus.
 pub const MAX_PIECES: usize = 8;
@@ -17,51 +18,10 @@ const MAX_TEXTE: usize = 24_000;
 
 /// Ouvre la fenêtre « Ouvrir » du bureau ; renvoie les fichiers choisis (vide : annulé).
 pub fn choisir(titre: &str) -> Result<Vec<PathBuf>, String> {
-    match portail(titre) {
+    match crate::portail::ouvrir(titre) {
         Ok(v) => Ok(v),
         Err(e) => repli(titre).ok_or_else(|| t!("aucune fenêtre de choix de fichier disponible ({})", e).to_string()),
     }
-}
-
-fn portail(titre: &str) -> Result<Vec<PathBuf>, String> {
-    use futures_lite::StreamExt;
-    let titre = titre.to_string();
-    zbus::block_on(async move {
-        let c = zbus::Connection::session().await.map_err(|e| e.to_string())?;
-        // Le portail répond par un signal sur un chemin calculé d'avance : on l'écoute avant
-        // d'appeler, pour ne pas manquer une réponse rapide.
-        let jeton = format!("lkatta{}", fastrand::u32(..));
-        let moi = c.unique_name().map(|n| n.trim_start_matches(':').replace('.', "_")).unwrap_or_default();
-        let chemin = format!("/org/freedesktop/portal/desktop/request/{moi}/{jeton}");
-        let regle = zbus::MatchRule::builder()
-            .msg_type(zbus::message::Type::Signal)
-            .interface("org.freedesktop.portal.Request")
-            .member("Response")
-            .path(chemin.as_str())
-            .build();
-        let regle = regle.map_err(|e| e.to_string())?;
-        let mut flux = zbus::MessageStream::for_match_rule(regle, &c, std::num::NonZeroUsize::new(4)).await.map_err(|e| e.to_string())?;
-        let mut options: HashMap<&str, Value> = HashMap::new();
-        options.insert("handle_token", Value::from(jeton.as_str()));
-        options.insert("multiple", Value::from(true));
-        options.insert("modal", Value::from(true));
-        let r = c
-            .call_method(Some("org.freedesktop.portal.Desktop"), "/org/freedesktop/portal/desktop", Some("org.freedesktop.portal.FileChooser"), "OpenFile", &("", titre.as_str(), options))
-            .await
-            .map_err(|e| e.to_string())?;
-        let _: OwnedObjectPath = r.body().deserialize().map_err(|e| e.to_string())?;
-        // L'utilisateur prend le temps qu'il veut ; la fenêtre est celle du bureau.
-        while let Some(m) = flux.next().await {
-            let Ok(m) = m else { continue };
-            let (code, res): (u32, HashMap<String, OwnedValue>) = m.body().deserialize().map_err(|e| e.to_string())?;
-            if code != 0 {
-                return Ok(vec![]);
-            }
-            let uris: Vec<String> = res.get("uris").and_then(|v| Vec::<String>::try_from(v.clone()).ok()).unwrap_or_default();
-            return Ok(uris.iter().filter_map(|u| depuis_uri(u)).collect());
-        }
-        Err("portail muet".to_string())
-    })
 }
 
 /// `file:///home/a/Mon%20fichier.pdf` → `/home/a/Mon fichier.pdf` (autres schémas : ignorés).

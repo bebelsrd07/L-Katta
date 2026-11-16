@@ -84,6 +84,7 @@ pub const T: &[(&str, &str)] = &[
     ("les notifications du bureau ne sont pas encore câblées sur ce système", "desktop notifications are not wired up on this system yet"),
     ("l'accessibilité du bureau n'est pas encore câblée sur ce système", "desktop accessibility is not wired up on this system yet"),
     ("l'extension GNOME de L Katta ne sert que sous GNOME Shell", "L Katta's GNOME extension only works under GNOME Shell"),
+    ("la fenêtre « Ouvrir » du système n'est pas encore câblée ici", "the system's Open dialog is not wired up here yet"),
     ("la nouvelle AppImage ne donne pas la version attendue", "the new AppImage doesn't report the expected version"),
     // Santé de la machine (sante.rs)
     ("Disque presque plein", "Disk almost full"),

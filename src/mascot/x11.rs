@@ -558,7 +558,7 @@ fn ecrans(c: &impl Connection, racine: xproto::Window, larg: u16, haut: u16) -> 
 }
 
 /// Lance le maki sur un serveur X11 (sessions XFCE, Cinnamon, MATE, i3, KDE en X11…).
-pub fn run(cfg: crate::config::Config, rx: smithay_client_toolkit::reexports::calloop::channel::Channel<crate::ipc::Msg>) -> Result<(), String> {
+pub fn run(cfg: crate::config::Config, rx: crate::os::canal::Recepteur<crate::ipc::Msg>) -> Result<(), String> {
     use smithay_client_toolkit::reexports::calloop::{self, EventLoop, generic::Generic, Interest, Mode as CMode, PostAction, timer::{TimeoutAction, Timer}};
     use std::os::fd::AsFd;
     let (c, n) = x11rb::connect(None).map_err(|e| t!("pas de serveur X ({})", e))?;
