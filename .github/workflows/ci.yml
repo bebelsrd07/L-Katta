@@ -58,18 +58,28 @@ jobs:
           # `set +e` : grep renvoie 1 quand il ne trouve rien, et un `| head` renvoie SIGPIPE
           # — sous le `-eo pipefail` de `shell: bash`, l'un ou l'autre ferait échouer ce pas,
           # qui est justement là pour rendre compte d'un échec.
+          # On ne devine pas la forme des messages : on prend toute ligne qui parle d'erreur,
+          # PUIS la fin du journal, où se trouve de toute façon le résumé de l'échec.
           set +e
-          grep -hE '^(error|warning)(\[E?[0-9]*\])?:|^ *--> |^test .* FAILED|^failures:|^ +[a-zA-Z_].*\.rs:[0-9]+' sortie-tests.log sortie-compile.log > erreurs-brutes.txt
-          head -100 erreurs-brutes.txt > erreurs-corps.txt
-          wc -l < erreurs-brutes.txt > erreurs-nombre.txt
+          for f in sortie-tests.log sortie-compile.log; do
+            test -f "$f" || continue
+            echo "===== $f : lignes en cause ====="
+            grep -inE 'error|warning: unused|panicked|FAILED|^failures|cannot find|expected|mismatched|not found in|no method|no function|unresolved|trait bound|borrowed|moved value|E0[0-9]{3}' "$f" | head -120
+            echo
+            echo "===== $f : 150 dernières lignes ====="
+            tail -150 "$f"
+            echo
+          done > erreurs-corps.txt
+          head -400 erreurs-corps.txt > erreurs-coupe.txt
+          wc -c < erreurs-coupe.txt > erreurs-nombre.txt
           set -e
           {
             echo "### Erreurs de compilation ou de tests (${GITHUB_SHA::7})"
             echo
-            echo "$(cat erreurs-nombre.txt) ligne(s) retenue(s), 100 au plus :"
+            echo "$(cat erreurs-nombre.txt) octet(s) de journal :"
             echo
             echo '```'
-            cat erreurs-corps.txt
+            cat erreurs-coupe.txt
             echo '```'
           } > erreurs.md
           gh api -X POST "repos/$REPO/issues/$PR/comments" -F body=@erreurs.md
