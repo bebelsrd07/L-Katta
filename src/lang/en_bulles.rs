@@ -81,6 +81,7 @@ pub const T: &[(&str, &str)] = &[
     ("nouveau binaire inutilisable : {}", "new binary unusable: {}"),
     ("le nouveau binaire ne donne pas la version attendue", "the new binary doesn't report the expected version"),
     ("nouvelle AppImage inutilisable : {}", "new AppImage unusable: {}"),
+    ("les notifications du bureau ne sont pas encore câblées sur ce système", "desktop notifications are not wired up on this system yet"),
     ("la nouvelle AppImage ne donne pas la version attendue", "the new AppImage doesn't report the expected version"),
     // Santé de la machine (sante.rs)
     ("Disque presque plein", "Disk almost full"),

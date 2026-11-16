@@ -73,8 +73,13 @@ jobs:
           head -400 erreurs-corps.txt > erreurs-coupe.txt
           wc -c < erreurs-coupe.txt > erreurs-nombre.txt
           set -e
+          # `GITHUB_SHA` d'un événement pull_request est le commit de fusion éphémère que
+          # GitHub fabrique pour essayer la demande : il n'est dans aucun historique local,
+          # donc personne ne peut le retrouver. On cite la tête du PR à la place.
+          TETE='${{ github.event.pull_request.head.sha }}'
+          TETE="${TETE:-$GITHUB_SHA}"
           {
-            echo "### Erreurs de compilation ou de tests (${GITHUB_SHA::7})"
+            echo "### Erreurs de compilation ou de tests (${TETE::7})"
             echo
             echo "$(cat erreurs-nombre.txt) octet(s) de journal :"
             echo
@@ -131,18 +136,36 @@ jobs:
           # `set +e` : grep renvoie 1 quand il ne trouve rien, et un `| head` renvoie SIGPIPE.
           set +e
           test -f windows-check.log || exit 0
-          grep -oE 'could not compile `[^`]+`' windows-check.log | sort -u > crates.txt
-          grep -inE '^error|^warning: unused|cannot find|unresolved|not found in|no method|trait bound|E0[0-9]{3}' windows-check.log | head -100 > erreurs.txt
-          tail -60 windows-check.log > fin.txt
+          # Tee-Object écrit en CRLF : sans les \r retirés, plus aucun motif ancré à la fin de
+          # ligne ne correspondrait.
+          tr -d '\r' < windows-check.log > journal.txt
+          grep -oE 'could not compile `[^`]+`' journal.txt | sort -u > crates.txt
+          # Chaque erreur suivie de l'endroit du code qu'elle désigne. Savoir que `zbus` ne
+          # compile pas ne dit pas quoi fermer : c'est la ligne `--> src/…` qui le dit.
+          awk '/^error|^warning: unused/{e=$0} /^ +--> /{if(e!=""){print e; print "  " $0; e=""}}' journal.txt | head -160 > erreurs.txt
+          # Les erreurs sans localisation (fin de compilation, crate introuvable) comptent aussi.
+          grep -E '^error: aborting|^error\[E0463\]|could not compile' journal.txt | head -10 >> erreurs.txt
+          # Et quels fichiers sont en cause, du plus chargé au moins : c'est la liste de travail
+          # du portage, et elle permet de voir d'une passe si un fichier entier doit être fermé.
+          grep -oE -- '--> src/[A-Za-z0-9_/.]+\.rs' journal.txt | sed 's/--> //' | cut -d: -f1 | sort | uniq -c | sort -rn | head -25 > fichiers.txt
+          tail -60 journal.txt > fin.txt
           set -e
           {
-            echo "### Portage Windows : ce qui bloque (${GITHUB_SHA::7})"
+            # Même raison que pour le job `tests` : citer la tête du PR, pas le commit de
+            # fusion éphémère.
+            TETE='${{ github.event.pull_request.head.sha }}'
+            TETE="${TETE:-$GITHUB_SHA}"
+            echo "### Portage Windows : ce qui bloque (${TETE::7})"
             echo
             echo " cargo check --target x86_64-pc-windows-msvc, relevé automatique (job non bloquant)."
             echo
             echo "**$(wc -l < crates.txt) crate(s) ne compilent pas encore pour Windows :**"
             echo
             sed 's/could not compile/- /' crates.txt
+            echo
+            echo "**Fichiers en cause (nombre d'erreurs, du plus chargé au moins) :**"
+            echo
+            test -s fichiers.txt && cat fichiers.txt || echo "  (aucune localisation dans le journal)"
             echo
             echo '```'
             cat erreurs.txt

@@ -219,6 +219,36 @@ pub fn relancer(exe: &Path, args: &[String]) -> ! {
     }
 }
 
+// ── Notifications ────────────────────────────────────────────────────────────
+
+/// Envoie une notification au bureau de l'utilisateur.
+#[cfg(target_os = "linux")]
+pub fn notifier(titre: &str, texte: &str) -> Result<(), String> {
+    notify_rust::Notification::new()
+        .appname("L Katta")
+        .summary(titre)
+        .body(texte)
+        .icon("face-smile")
+        .show()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn notifier(titre: &str, texte: &str) -> Result<(), String> {
+    // Dit clairement pourquoi ça ne part pas, plutôt que de rendre Ok(()) : un rappel que
+    // l'utilisateur croirait envoyé et qui n'a jamais été affiché est pire qu'un échec annoncé.
+    //
+    // Sur Windows le natif est `ToastNotificationManager` (WinRT), qui demande les liaisons
+    // `windows` — donc une dépendance nouvelle, et le `Cargo.lock` ne peut pas être régénéré
+    // d'ici. C'est l'étape 2 du portage. Contourner par PowerShell aurait l'air de marcher,
+    // mais c'est exactement le genre d'approximation que ce projet s'interdit.
+    //
+    // Ailleurs sur Unix, `notify-rust` n'est plus une dépendance que pour Linux.
+    let _ = (titre, texte);
+    Err(t!("les notifications du bureau ne sont pas encore câblées sur ce système").to_string())
+}
+
 // ── Politesse envers la machine ──────────────────────────────────────────────
 
 /// Le fil courant passe en priorité minimale : processeur **et** disque.

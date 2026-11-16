@@ -1086,15 +1086,9 @@ pub fn list_reminders() -> String {
         .join("\n")
 }
 
+/// Relais vers le socle : c'est lui qui sait comment parler au bureau du système.
 pub fn notify(titre: &str, texte: &str) -> Result<(), String> {
-    notify_rust::Notification::new()
-        .appname("L Katta")
-        .summary(titre)
-        .body(texte)
-        .icon("face-smile")
-        .show()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    crate::os::notifier(titre, texte)
 }
 
 #[cfg(test)]
