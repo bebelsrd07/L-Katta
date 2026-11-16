@@ -36,6 +36,35 @@ jobs:
       - name: Avertissements du compilateur
         run: RUSTFLAGS="-D warnings" cargo build --locked
 
+  # Reconnaissance Windows : ce que le portage natif (docs/PLAN.md, étape 0) devra rendre
+  # compilable. `continue-on-error` pour l'instant — les crates Wayland/X11 ne se construisent
+  # pas encore pour Windows, et c'est justement l'objet de l'étape 0 (les passer sous
+  # `[target.'cfg(target_os = "linux")'.dependencies]`). Le journal dit lesquelles bloquent.
+  # Il deviendra bloquant dès que `cargo check` passera : ne pas le retirer avant.
+  windows:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Ce qui compile déjà pour Windows
+        run: cargo check --locked --target x86_64-pc-windows-msvc 2>&1 | Tee-Object -FilePath windows-check.log
+      - name: Résumé (crates en cause)
+        if: always()
+        run: |
+          Select-String -Path windows-check.log -Pattern '^error(\[|:)' | Measure-Object | ForEach-Object { "erreurs : $($_.Count)" }
+          Select-String -Path windows-check.log -Pattern 'error(\[E\d+\])?: (could not compile|failed to)' | Select-Object -First 25 | ForEach-Object { $_.Line }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: windows-check-log
+          path: windows-check.log
+          if-no-files-found: ignore
+
   appimage:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     needs: tests
