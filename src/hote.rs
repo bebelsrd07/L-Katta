@@ -4,6 +4,9 @@
 //! les contient pas : ils passent par `flatpak-spawn --host`, qui les lance sur la machine
 //! avec les droits de l'utilisateur (docs/SECURITE.md : ce Flatpak n'est pas un bac à sable).
 //! Les variables d'environnement ne traversent pas : `commande_env` les passe en `--env=`.
+//!
+//! Sous Windows il n'y a ni `xdg-open` ni Flatpak : `ouvrir` passe par `ShellExecuteW`, et
+//! `commande` lance le programme demandé tel quel. Rien d'autre ici ne dépend de Linux.
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -113,8 +116,97 @@ pub fn gestionnaire() -> Option<String> {
     (exe.starts_with("/usr/") || exe.starts_with("/opt/")).then(|| t!("ton gestionnaire de paquets").into())
 }
 
+/// Ouvre un fichier, un dossier ou une adresse web avec l'application par défaut.
+///
+/// Prend un `OsStr` et non une `String` : un chemin n'est pas toujours de l'UTF-8 valide, et
+/// `to_string_lossy` ferait ouvrir un autre fichier que celui demandé.
+///
+/// Ouvre, et n'exécute jamais — voir `a_refuser`.
+#[cfg(unix)]
+pub fn ouvrir(cible: &OsStr) -> std::io::Result<()> {
+    // `commande` et non `Command::new` : dans le Flatpak, `xdg-open` doit passer par
+    // `flatpak-spawn --host` pour atteindre le navigateur de la machine.
+    commande("xdg-open").arg(cible).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
+    Ok(())
+}
+
+#[cfg(windows)]
+pub fn ouvrir(cible: &OsStr) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    if a_refuser(cible) {
+        return Err(std::io::Error::other("ouvrir montre un document, il n'exécute pas de programme"));
+    }
+    // Deux chaînes UTF-16 terminées par un NUL, comme toute l'API `W`. `encode_wide` et non une
+    // conversion depuis `to_string_lossy` : un chemin non UTF-8 resterait le même chemin.
+    let operation: Vec<u16> = "open".encode_utf16().chain(std::iter::once(0)).collect();
+    let cible: Vec<u16> = cible.encode_wide().chain(std::iter::once(0)).collect();
+    const SW_SHOWNORMAL: i32 = 1;
+    // SAFETY : les deux chaînes vivent jusqu'à la fin de l'appel et se terminent par un NUL ;
+    // paramètres et dossier à NULL, ce que l'API accepte ; fenêtre à NULL, rien ici n'étant
+    // modal. `ShellExecuteW` et non `cmd /c start` : faire traverser une adresse par un
+    // interpréteur de commandes transformerait un « & » ou un « | » en commande.
+    let r = unsafe { ShellExecuteW(0, operation.as_ptr(), cible.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) };
+    // En dessous de 32 ce n'est pas une poignée mais un code d'échec. Le test de signe vient
+    // d'abord : `as usize` d'une valeur négative donnerait un très grand nombre, donc un échec
+    // pris pour une réussite.
+    if r < 0 || (r as usize) < 32 {
+        return Err(std::io::Error::other(format!("ShellExecuteW a refusé d'ouvrir (code {r})")));
+    }
+    Ok(())
+}
+
+/// Ce que `ouvrir` refuse sous Windows : les programmes et les scripts.
+///
+/// `xdg-open` consulte la base mime, et un script s'ouvre dans un éditeur. `ShellExecuteW` avec
+/// « open » fait autre chose : il **exécute** un `.exe`, un `.bat` ou un `.ps1`. Or `ouvrir` est
+/// atteignable par l'outil `ouvrir` que le modèle peut appeler avec la cible de son choix — sans
+/// cette garde, cet outil deviendrait sous Windows un moyen de lancer n'importe quel programme.
+///
+/// La garde est donc du côté où est le danger : sous Linux, `xdg-open` garde exactement son
+/// comportement d'aujourd'hui.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn a_refuser(cible: &OsStr) -> bool {
+    const DANGEREUX: [&str; 12] = ["exe", "bat", "cmd", "com", "scr", "msi", "ps1", "vbs", "js", "jse", "hta", "wsf"];
+    let nom = cible.to_string_lossy();
+    // Une adresse web se reconnaît à son schéma : « https://x/outil.exe » doit rester ouvrable,
+    // c'est le navigateur qui décide ce qu'il en fait, et il ne l'exécute pas.
+    if nom.contains("://") {
+        return false;
+    }
+    let Some(point) = nom.rfind('.') else { return false };
+    DANGEREUX.contains(&nom[point + 1..].to_ascii_lowercase().as_str())
+}
+
+#[cfg(windows)]
+#[link(name = "shell32")]
+unsafe extern "system" {
+    /// Ouvre un document ou une adresse avec l'application associée. Rend une pseudo-poignée :
+    /// au-dessus de 32 cela a marché, en dessous c'est un code d'échec.
+    fn ShellExecuteW(
+        fenetre: isize,
+        operation: *const u16,
+        cible: *const u16,
+        parametres: *const u16,
+        dossier: *const u16,
+        commande: i32,
+    ) -> isize;
+}
+
 #[cfg(test)]
 mod tests {
+    /// La garde de `ouvrir` : ce qu'elle refuse, et ce qu'elle laisse passer.
+    #[test]
+    fn open_never_runs_a_program() {
+        use std::ffi::OsStr;
+        for c in ["outil.exe", "C:\\outils\\outil.EXE", "install.msi", "script.ps1", "macro.vbs", "départ.bat", "page.hta", "tâche.wsf", "charge.js"] {
+            assert!(super::a_refuser(OsStr::new(c)), "{c} devrait être refusé");
+        }
+        for c in ["notes.md", "config.toml", "photo.png", "facture.pdf", "C:\\docs\\rapport.docx", "/home/moi/Documents", "sans-extension", "https://exemple.fr/outil.exe", "http://a.b/c.ps1"] {
+            assert!(!super::a_refuser(OsStr::new(c)), "{c} devrait passer");
+        }
+    }
+
     #[test]
     fn host_commands_outside_flatpak() {
         if super::flatpak() {

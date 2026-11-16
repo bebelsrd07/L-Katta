@@ -1040,12 +1040,7 @@ fn open(cible: &str) -> Result<String, String> {
     if !target.starts_with("http") && !Path::new(&target).exists() {
         return Err(format!("{target} n'existe pas"));
     }
-    crate::hote::commande("xdg-open")
-        .arg(&target)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| e.to_string())?;
+    crate::hote::ouvrir(std::ffi::OsStr::new(&target)).map_err(|e| e.to_string())?;
     Ok(format!("Ouvert : {target}"))
 }
 

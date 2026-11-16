@@ -1942,7 +1942,7 @@ impl Chat {
                 if !path.exists() {
                     let _ = crate::paths::write_private(&path, b"");
                 }
-                let _ = crate::hote::commande("xdg-open").arg(&path).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+                let _ = crate::hote::ouvrir(path.as_os_str());
                 self.say_panel(true, t!("{} ouvert dans ton éditeur ; enregistre-le, c'est pris en compte à la question suivante.", f));
             }
             Act::ChoisirModele => {
@@ -1975,7 +1975,7 @@ impl Chat {
             Act::ObtenirCle(id) => {
                 self.retour_attendu = true;
                 if let Some(f) = crate::cles::fournisseur(id) {
-                    let _ = crate::hote::commande("xdg-open").arg(f.key_url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+                    let _ = crate::hote::ouvrir(std::ffi::OsStr::new(f.key_url));
                     if let Some(p) = &mut self.panneau {
                         p.focus = Some(Champ::Cle(id));
                     }
@@ -1984,12 +1984,12 @@ impl Chat {
             }
             Act::OuvrirLien(url) => {
                 self.retour_attendu = true;
-                let _ = crate::hote::commande("xdg-open").arg(url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+                let _ = crate::hote::ouvrir(std::ffi::OsStr::new(url));
                 self.say_panel(true, t!("Page ouverte dans ton navigateur : copie ce qu'il faut, puis colle-le ici (Ctrl+V)."));
             }
             Act::Ouvrir(url) => {
                 self.retour_attendu = true;
-                let _ = crate::hote::commande("xdg-open").arg(url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+                let _ = crate::hote::ouvrir(std::ffi::OsStr::new(url));
                 self.say_panel(true, t!("Ouvert : {}", url));
             }
             Act::RetirerCle(id) => {
