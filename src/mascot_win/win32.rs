@@ -26,12 +26,6 @@
 //! — très en dessous du budget de 15 Mo. La fenêtre est déplacée pour suivre le maki plutôt que
 //! d'occuper tout l'écran, ce qui est aussi ce que font les backends Wayland et X11.
 //!
-//! ## Ce qui n'est pas câblé
-//!
-//! Les boutons d'action sous une bulle spontanée : `actions_for` vit dans `mascot/mod.rs` et
-//! dépend de ses outils (historique, fils, courriel). Tout le reste — la discussion, ses réglages,
-//! le clavier, le presse-papiers, les fichiers joints, l'historique des fils — passe par `chat` et
-//! `draw`, qui sont portables, et est branché ici.
 
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -1085,10 +1079,9 @@ impl Etat {
             ));
         } else if let Some(b) = &self.maki.bubble {
             let tete = self.tete();
-            // Les boutons d'action ne sont pas câblés : `actions_for` vit dans `mascot/mod.rs` et
-            // dépend de ses outils. La croix et le texte qui se révèle, eux, le sont.
+            let actions = actions_for(&b.msg);
             self.bulle_layout = Some(draw::fancy_bubble(
-                &mut self.pixmap, &self.texte, &self.gras, b, &[], tete.0 - sx, tete.1 - sy, u,
+                &mut self.pixmap, &self.texte, &self.gras, b, &actions, tete.0 - sx, tete.1 - sy, u,
             ));
         }
     }
@@ -1471,12 +1464,45 @@ impl Etat {
     fn clic_bulle(&mut self, lay: &BubbleLayout, p: (f32, f32)) {
         if hit(lay.close, p) {
             self.maki.bubble = None;
+        } else if let Some(i) = lay.actions.iter().position(|r| hit(*r, p)) {
+            if let Some(label) = self.maki.bubble.as_ref().and_then(|b| actions_for(&b.msg).get(i).copied()) {
+                self.action_bulle(label);
+            }
         } else if let Some(b) = &mut self.maki.bubble {
             if b.revealed() < b.full() {
                 b.age = 60.0;
             } else {
                 self.maki.bubble = None;
             }
+        }
+    }
+
+    fn action_bulle(&mut self, label: &str) {
+        let Some(b) = self.maki.bubble.take() else { return };
+        match label {
+            "Discuter" | "Lire en entier" => { if !self.chat.open { self.basculer_chat(); } }
+            "Une astuce" | "Autre astuce" => self.montrer(crate::conseils::astuce()),
+            "Dans 10 min" => {
+                let when = chrono::Local::now() + chrono::Duration::minutes(10);
+                let _ = crate::reminders::add(when, &b.msg.text);
+                self.maki.say(t!("D'accord, je te le redis dans 10 minutes."), 3.5);
+            }
+            "Qu'en faire ?" => {
+                if !self.chat.open { self.basculer_chat(); }
+                self.chat.input.set(t!("{} : {}. Explique-moi simplement et dis-moi quoi faire.", b.msg.title, b.msg.text));
+                self.chat.submit();
+            }
+            "Résumer" => {
+                if !self.chat.open { self.basculer_chat(); }
+                self.chat.input.set(t!("Résume mes nouveaux mails non lus en quelques lignes, du plus important au moins important."));
+                self.chat.submit();
+            }
+            "Mettre à jour" => {
+                let _ = crate::hote::commande(crate::paths::self_exe()).arg("maj").spawn();
+                self.maki.say(t!("Je télécharge la nouvelle version…"), 6.0);
+            }
+            "Lire" => { if let Some(lien) = &b.msg.link { self.ouvrir_adresse(lien); } }
+            _ => self.maki.set_expr(super::behavior::Expr::Happy, 1.5),
         }
     }
 
@@ -1701,6 +1727,20 @@ impl Etat {
             self.maki.say(espece.presentation(), 3.0);
             self.maki.teleport(&ctx);
         }
+    }
+}
+
+fn actions_for(m: &Message) -> Vec<&'static str> {
+    match m.kind {
+        Kind::Hello => vec!["Discuter", "Une astuce"],
+        Kind::Tip => vec!["Autre astuce", "Merci"],
+        Kind::Reminder => vec!["C'est noté", "Dans 10 min"],
+        Kind::Alert => vec!["Qu'en faire ?", "Plus tard"],
+        Kind::News if m.link.as_deref().is_some_and(|l| l.starts_with("maj:")) => vec!["Mettre à jour", "Plus tard"],
+        Kind::News if m.link.is_some() => vec!["Lire", "OK"],
+        Kind::Answer => vec!["Lire en entier", "OK"],
+        Kind::Mail => vec!["Résumer", "Plus tard"],
+        _ => vec![],
     }
 }
 
