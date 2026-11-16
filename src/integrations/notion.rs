@@ -23,7 +23,8 @@ const API: &str = "https://api.notion.com/v1";
 /// Version d'API annoncée à Notion.
 const VERSION: &str = "2022-06-28";
 /// Plafond de lecture d'une réponse : large pour une page entière, pas de quoi saturer la bulle.
-const LIMITE: usize = 8 * 1024 * 1024;
+/// `u64` et non `usize` : c'est ce que demande `BodyConfig::limit` d'ureq.
+const LIMITE: u64 = 8 * 1024 * 1024;
 /// Blocs par appel : le maximum que Notion accepte.
 const PAR_PAGE: usize = 100;
 /// Niveaux de blocs enfants lus sous un bloc (au-delà, on s'arrête et on le dit).
@@ -50,12 +51,29 @@ fn agent() -> ureq::Agent {
 /// un titre n'a jamais cette forme, et l'identifiant est toujours ce qu'il y a de plus à droite.
 pub fn id_depuis_url(s: &str) -> String {
     let propre = s.trim().split(['?', '#']).next().unwrap_or("");
-    // Coupé sur tout ce qui n'est ni hexadécimal ni tiret : l'identifiant survit entier.
-    let morceaux: Vec<&str> = propre.split(|c: char| !(c.is_ascii_hexdigit() || c == '-')).filter(|m| !m.is_empty()).collect();
-    for m in morceaux.iter().rev() {
-        let plat: String = m.chars().filter(|c| *c != '-').map(|c| c.to_ascii_lowercase()).collect();
-        if plat.len() == 32 && plat.chars().all(|c| c.is_ascii_hexdigit()) {
-            return uuid(&plat);
+    // Notion met l'identifiant en fin d'adresse, seul ou derrière un titre :
+    //   /1a2b…c6d  ·  /Mon-Titre-1a2b…c6d  ·  /1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
+    // On remonte les segments, puis les morceaux séparés par des tirets, en accumulant jusqu'à
+    // 32 hexadécimaux. Depuis la fin et jamais depuis le début : un titre peut se terminer par
+    // une lettre hexadécimale (« Titre » finit par « e »), et compter depuis le début collerait
+    // ce « e » à l'identifiant — 33 caractères, donc rien de reconnu.
+    for segment in propre.split('/').rev() {
+        let mut accum = String::new();
+        for morceau in segment.split('-').rev() {
+            if morceau.is_empty() {
+                continue;
+            }
+            // Dès qu'un morceau n'est pas hexadécimal, le titre commence : on arrête ce segment.
+            if !morceau.chars().all(|c| c.is_ascii_hexdigit()) {
+                break;
+            }
+            accum.insert_str(0, morceau);
+            if accum.len() == 32 {
+                return uuid(&accum.to_ascii_lowercase());
+            }
+            if accum.len() > 32 {
+                break;
+            }
         }
     }
     String::new()
@@ -854,7 +872,7 @@ mod tests {
         assert_eq!(id_depuis_url(&format!("https://www.notion.so/{plat}")), id);
         assert_eq!(id_depuis_url(&format!("https://www.notion.so/Mon-Titre-{plat}")), id);
         assert_eq!(id_depuis_url(&format!("https://www.notion.so/Mon-Titre-{plat}?pvs=4")), id);
-        assert_eq!(id_depuis_url(&format!("https:// equipe.notion.site/Titre/{id}")), id);
+        assert_eq!(id_depuis_url(&format!("https://equipe.notion.site/Titre/{id}")), id);
         assert_eq!(id_depuis_url(&format!("  {plat}  ")), id);
         // Un titre seul n'est pas un identifiant : on ne devine rien.
         assert_eq!(id_depuis_url("https://www.notion.so/Mon-Titre"), "");
@@ -874,10 +892,15 @@ mod tests {
     fn rich_text_keeps_marks_and_moves_spaces_out() {
         let v = json!([
             {"plain_text": "bon ", "text": {"content": "bon "}, "annotations": {}},
-            {"plain_text": " gras ", "text": {"content": " gras "}, "annotations": {"bold": true}},
-            {"plain_text": "fin", "text": {"content": "fin"}, "annotations": {}}
+            {"plain_text": "gras", "text": {"content": "gras"}, "annotations": {"bold": true}},
+            {"plain_text": " fin", "text": {"content": " fin"}, "annotations": {}}
         ]);
         assert_eq!(texte_riche(&v), "bon **gras** fin");
+        // Un morceau qui porte ses propres espaces : les marques se posent sur le mot, pas sur
+        // les espaces — « ** gras ** » ne s'affiche pas en gras, « **gras** » si. Les espaces
+        // sont conservés autour, parce que le texte de Notion est rendu tel quel.
+        let seul = json!([{"plain_text": " gras ", "text": {"content": " gras "}, "annotations": {"bold": true}}]);
+        assert_eq!(texte_riche(&seul), " **gras** ");
     }
 
     #[test]
@@ -995,7 +1018,8 @@ mod tests {
         let blocs = blocs_depuis_markdown("```rust\nfn a() {}\nlet x = 1;\n```\n");
         assert_eq!(blocs.len(), 1);
         assert_eq!(blocs[0].pointer("/code/language"), Some(&json!("rust")));
-        assert_eq!(blocs[0].pointer("/code/rich_text/0/text/content"), Some(&json!("fn a() {}\nlet x = 1")));
+        // Le point-virgule est conservé : dans une clôture, rien n'est retouché.
+        assert_eq!(blocs[0].pointer("/code/rich_text/0/text/content"), Some(&json!("fn a() {}\nlet x = 1;")));
         // Dedans d'une clôture, un « # » n'est pas un titre.
         let dedans = blocs_depuis_markdown("```\n# pas un titre\n");
         assert_eq!(dedans.len(), 1);
@@ -1030,7 +1054,8 @@ mod tests {
         let a = apercu_ecriture("Rapport", "# Titre\n- un\n- deux", "base Tâches");
         assert!(a.contains("Rapport") && a.contains("base Tâches"));
         // Le nombre de blocs et le texte lui-même sont montrés, pas seulement un titre.
-        assert!(a.contains("2") && a.contains("- deux"));
+        assert!(a.contains("Bloc(s) : 3"), "{a}");
+        assert!(a.contains("- deux"), "{a}");
     }
 
     #[test]
