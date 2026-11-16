@@ -92,6 +92,11 @@ jobs:
   windows:
     runs-on: windows-latest
     continue-on-error: true
+    # Même raison que pour `tests` : publier le relevé sur la demande de fusion, parce que le
+    # journal et l'artefact d'un run ne se téléchargent que depuis des hôtes à part.
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -112,6 +117,42 @@ jobs:
           name: windows-check-log
           path: windows-check.log
           if-no-files-found: ignore
+      # Le relevé est publié sur la demande de fusion : l'artefact ci-dessus ne se télécharge
+      # que depuis un hôte à part, et c'est lui qui dit quelles crates l'étape 0 devra passer
+      # sous `[target.'cfg(target_os = "linux")'.dependencies]`.
+      - name: Publier les crates qui bloquent le portage
+        if: always() && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # `set +e` : grep renvoie 1 quand il ne trouve rien, et un `| head` renvoie SIGPIPE.
+          set +e
+          test -f windows-check.log || exit 0
+          grep -oE 'could not compile `[^`]+`' windows-check.log | sort -u > crates.txt
+          grep -inE '^error|^warning: unused|cannot find|unresolved|not found in|no method|trait bound|E0[0-9]{3}' windows-check.log | head -100 > erreurs.txt
+          tail -60 windows-check.log > fin.txt
+          set -e
+          {
+            echo "### Portage Windows : ce qui bloque (${GITHUB_SHA::7})"
+            echo
+            echo " cargo check --target x86_64-pc-windows-msvc, relevé automatique (job non bloquant)."
+            echo
+            echo "**$(wc -l < crates.txt) crate(s) ne compilent pas encore pour Windows :**"
+            echo
+            sed 's/could not compile/- /' crates.txt
+            echo
+            echo '```'
+            cat erreurs.txt
+            echo "----- fin du journal -----"
+            cat fin.txt
+            echo '```'
+          } > windows.md
+          # Un commentaire GitHub tient dans 65 536 caractères.
+          head -c 60000 windows.md > windows-corps.md
+          gh api -X POST "repos/$REPO/issues/$PR/comments" -F body=@windows-corps.md
 
   appimage:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
