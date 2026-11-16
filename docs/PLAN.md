@@ -220,29 +220,40 @@ testé localement. Chaque chiffre ci-dessous vient d'un rapport de CI, pas d'une
 | `a5ad705` | **0** | Le reste venait de mon propre code Win32 : des poignées `isize` sans `is_null()`, un double emprunt, et `futures-lite` devenu Linux seul. **`cargo build --release` passe, `lkatta.exe` est produit** |
 
 **Le portage compile.** `a5ad705` est le premier envoi où le job `windows` finit en `success` :
-`cargo build --release --locked --target x86_64-pc-windows-msvc` aboutit, et `lkatta.exe`
-(5 146 805 octets) est publié comme artefact `lkatta-windows-x64` du run. La CI Linux reste verte
-à chaque envoi, et `mascot/mod.rs`, `mascot/x11.rs` et `Cargo.lock` n'ont pas été modifiés d'un
-octet : les jumeaux ajoutent, ils ne remplacent pas.
+`cargo build --release --locked --target x86_64-pc-windows-msvc` aboutit, et `lkatta.exe` est
+publié comme artefact `lkatta-windows-x64` du run. La CI Linux reste verte à chaque envoi, et
+`mascot/mod.rs`, `mascot/x11.rs` et `Cargo.lock` n'ont pas été modifiés d'un octet : les jumeaux
+ajoutent, ils ne remplacent pas.
 
-### Ce qui reste : 31 avertissements, et ce qu'ils veulent dire
+Le binaire pèse **10 689 536 octets** (10,2 Mo), mesuré sur `7a7c5e7`. L'artefact téléchargé fait
+environ 5 Mo : c'est la même chose compressée. À ne pas confondre avec le budget de **RAM** d'environ
+15 Mo du §2 — l'un est un fichier sur le disque, l'autre ce que le compagnon occupe en mémoire une
+fois lancé, et seul le second est une promesse du projet.
 
-Plus aucune erreur. Le rapport de CI liste maintenant les avertissements `dead_code`, qui sont
-l'information la plus utile qu'il donne : **une fonction « never used » sous Windows est une
-fonctionnalité qui n'y est pas encore branchée.** Le relevé de `a5ad705` en compte 31 sur 14
-fichiers, dont 7 identifiés dans le journal tronqué :
+### Ce qui reste : 31 avertissements, classés par fonctionnalité
 
-| Fonction jamais appelée sous Windows | Ce que ça veut dire | Étape |
-|---|---|---|
-| `toplevels::{etats, mettre_a_jour, prendre_actions, marquer_disponible}` | Le suivi des fenêtres n'est pas branché : `Ctx.avoid` et `Ctx.toit` restent vides, donc le maki ne monte pas sur les fenêtres et ne les évite pas | 2 |
-| `notifs::compte` | Le compteur de notifications n'a pas encore de source sous Windows | 2 |
-| `os::osstring_depuis_octets` | Le socle a la fonction, personne ne l'appelle encore sur cette cible | 2 |
-| `saisie`, `chat` (4 avertissements chacun) | La bulle de discussion : `draw::chat_bubble` est portable et prêt, mais le clavier et l'enchaînement vers `brain` ne sont pas câblés | 1 |
-| `win32.rs` : cast d'une fonction en entier | Corrigé dans l'envoi suivant : le rappel de fenêtre est maintenant un type `WNDPROC` déclaré, que le compilateur vérifie | — |
+Plus aucune erreur. Le rapport de CI liste les avertissements `dead_code`, qui sont l'information
+la plus utile qu'il donne : **une fonction « never used » sous Windows est une fonctionnalité qui
+n'y est pas encore branchée.** Le relevé complet de `7a7c5e7` compte 30 emplacements dans 14
+fichiers. Rangés par ce qu'ils veulent dire, ils forment cinq chantiers :
 
-Le rapport n'affichait que la fin du journal, donc 7 des 31 sont identifiés ; le format publié
-depuis en liste jusqu'à 80, triés par fichier avec leur message, donc le prochain run donnera la
-liste complète. C'est elle qui tient lieu de liste de choses à faire pour l'étape 2.
+| Chantier | Emplacements signalés | Ce que ça change pour l'utilisateur | Étape |
+|---|---|---|---|
+| **Suivi des fenêtres** | `toplevels` (4 : `etats`, `mettre_a_jour`, `prendre_actions`, `marquer_disponible`), `bureau` (6 : `PONT`, `pont_actif`, `focaliser_bulle`, `from_json`/`visio`, `SCRIPT`, `charger_script`), `ipc::Msg::Fenetre`, `atspi_ailleurs::noter_fenetre` — **12** | Le maki ne monte pas sur les fenêtres et ne les évite pas ; la discrétion en visioconférence ne s'applique pas | 2 |
+| **Bulle de discussion et clavier** | `chat` (4 : variantes `Fermer`/`Close`, `fermable` + 4 méthodes, un groupe de méthodes), `saisie` (2 : `MAX`, un groupe de méthodes) — **6** | On ne peut pas encore taper au maki sous Windows. `draw::chat_bubble` est portable et prêt : il manque la saisie et l'enchaînement vers `brain` | 1 |
+| **Choix de fichiers** | `fichiers` (4 : `choisir`, `depuis_uri`, `liste_uri`, `repli`), `portail_ailleurs::ouvrir` — **5** | Aucune commande ne peut demander un fichier par dialogue ; il faut donner le chemin | 1 |
+| **Comportements du maki non déclenchés** | `behavior` (2 : `height`, puis `busy`/`danse`/`vanish_to`/`teleport_at`/`arrive`/`quitter_toit`), `draw` (2 : `hit`, champs `rect`/`close`) — **4** | Le maki marche, grimpe, dort et se laisse traîner. Il ne danse pas encore, ne disparaît pas, et les boutons de sa bulle ne sont pas cliquables | 1 |
+| **Notifications, chemins, auto-relance** | `notifs::compte`, `os::osstring_depuis_octets`, `hote::relancer_lkatta` — **3** | Le compteur de notifications n'a pas de source, et une mise à jour ne peut pas relancer l'application | 2 |
+
+Cette liste est générée par la CI, pas tenue à la main : elle ne peut donc pas se mettre à mentir.
+Chaque chantier se referme en câblant la fonction, ce qui fait disparaître son avertissement —
+l'avancement se lit directement dans le rapport du run suivant.
+
+Le plus gros chantier est le premier, et il est connu d'avance (§9 et §10) : il n'y a pas de
+service de bureau sous Windows à la place du D-Bus de `bureau.rs`. La réponse native est
+`GetForegroundWindow` avec `GetWindowTextW` et `GetClassNameW`, interrogés en boucle plutôt
+qu'écoutés, en émettant `Msg::Fenetre` au changement. C'est écrit dans `bureau.rs` à l'endroit
+même où le service Linux est mis sous `cfg`, pour que ce soit trouvé par qui continue.
 
 Les jumeaux se traitent par le moyen déjà éprouvé sur `atspi`, `gnome` et `portail` : **choisi par
 `cfg` dans `main.rs`, même nom de module, donc aucun site d'appel à modifier.** Le code Linux reste

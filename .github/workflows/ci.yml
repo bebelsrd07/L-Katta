@@ -166,10 +166,16 @@ jobs:
           # utile : une fonction « never used » sous Windows est une fonctionnalité qui n'y est
           # pas encore branchée. Cette liste est donc l'état d'avancement réel du portage, et
           # elle n'a rien à voir avec des erreurs — d'où deux sections séparées.
-          awk '/^warning:/{w=substr($0,10)} /^ +--> /{if(w!=""){sub(/^ +--> /,""); print $0 "  « " w " »"; w=""}}' journal.txt | sed -e 's|\\|/|g' | sort | head -80 > avertissements.txt
+          # Les `\` deviennent des `/` pour que les chemins se regroupent, et
+          # `src/mascot_win/../mascot/…` redevient `src/mascot/…` : c'est le `#[path]` du jumeau
+          # qui apparaît dans le diagnostic, pas un fichier qui existerait deux fois.
+          awk '/^warning:/{w=substr($0,10)} /^ +--> /{if(w!=""){sub(/^ +--> /,""); print $0 "  « " w " »"; w=""}}' journal.txt | sed -e 's|\\|/|g' -e 's|src/mascot_win/\.\./mascot/|src/mascot/|g' | sort | head -80 > avertissements.txt
           N_AVERT=$(grep -cE '^warning' journal.txt)
 
-          # Le binaire, s'il est là. Sa taille compte aussi : le budget mémoire est de 15 Mo.
+          # Le binaire, s'il est là. Sa taille n'a rien à voir avec le budget de RAM (~15 Mo,
+          # §2 du plan) : c'est celle du fichier sur le disque. Elle vaut d'être publiée quand
+          # même, à chaque run, parce qu'un bond soudain signale quelque chose — des symboles de
+          # débogage laissés, ou une dépendance entrée par accident.
           EXE=target/x86_64-pc-windows-msvc/release/lkatta.exe
           if [ -f "$EXE" ]; then
             LIGNE_EXE="**lkatta.exe** : $(wc -c < "$EXE") octets, publié comme artefact \`lkatta-windows-x64\` du run."
