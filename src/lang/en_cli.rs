@@ -105,6 +105,7 @@ pub const T: &[(&str, &str)] = &[
     ("Titre :", "Title:"),
     ("Bloc(s) :", "Blocks:"),
     ("Changer ces propriétés dans Notion ({}) ?\n{}", "Change these properties in Notion ({})?\n{}"),
+    ("aucune destination : donne « parent », ou renseigne la base par défaut dans l'onglet Intégrations de la bulle", "no destination: give “parent”, or set the default database in the bubble's Integrations tab"),
     ("ce texte ne ressemble pas à un jeton Notion (ntn_… ou secret_…) : vérifie le copier-coller", "this doesn't look like a Notion token (ntn_… or secret_…): check what you pasted"),
     ("je cherche « {} »", "looking for “{}”"),
     ("je cherche le texte « {} »", "searching for the text “{}”"),

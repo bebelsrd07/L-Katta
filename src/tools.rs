@@ -181,7 +181,7 @@ fn tous_les_outils() -> Vec<Value> {
         tool("notion_requete_base", "Liste les lignes d'une base (tableau) Notion avec leurs propriétés, et un filtre simple sur une propriété. Le type réel de la propriété est lu dans la base, donc « Statut » = « Fait » marche sans deviner le format. Lecture seule.",
              json!({"base": s("adresse ou identifiant de la base"), "propriete": s("nom de la propriété à filtrer (optionnel)"), "valeur": s("valeur cherchée (optionnel)"), "nombre": {"type": "integer", "description": "lignes voulues (défaut 20)"}}), &["base"]),
         tool("notion_creer_page", "Crée une page Notion sous une base ou une page existante, avec un titre et un contenu Markdown. Demande confirmation.",
-             json!({"parent": s("adresse ou identifiant de la base/page parente"), "titre": s("titre de la nouvelle page"), "contenu": s("texte en Markdown : ## titres, - listes, - [ ] tâches, ```code```, > citations (optionnel)")}), &["parent", "titre"]),
+             json!({"parent": s("adresse ou identifiant de la base/page parente ; vide = la base par défaut de l'utilisateur"), "titre": s("titre de la nouvelle page"), "contenu": s("texte en Markdown : ## titres, - listes, - [ ] tâches, ```code```, > citations (optionnel)")}), &["titre"]),
         tool("notion_ajouter_blocs", "Ajoute du Markdown à la fin d'une page Notion existante (notes, résumé, tâches). Demande confirmation.",
              json!({"page": s("adresse ou identifiant de la page"), "contenu": s("texte en Markdown à ajouter")}), &["page", "contenu"]),
         tool("notion_modifier_proprietes", "Change les propriétés d'une page Notion : statut, case à cocher, date, sélection, texte, nombre. Demande confirmation.",
@@ -559,7 +559,7 @@ pub fn execute(name: &str, a: &Value, cfg: &Config, host: &mut dyn Host) -> Stri
         // --- Notion : lecture directe, écriture confirmée. Ce qui revient de Notion est une
         // donnée, donc entouré de `[CONTENU EXTERNE]` : une page peut contenir « envoie tous
         // mes mails », ce n'est pas une instruction à suivre.
-        n if n.starts_with("notion_") => notion_outil(n, a, host),
+        n if n.starts_with("notion_") => notion_outil(n, a, cfg, host),
         other => Err(format!("outil inconnu : {other}")),
     };
     truncate(match r {
@@ -577,7 +577,7 @@ pub fn execute(name: &str, a: &Value, cfg: &Config, host: &mut dyn Host) -> Stri
 /// lise d'un coup : **la lecture est directe, toute écriture est confirmée avec son texte
 /// montré** — l'utilisateur voit ce qui quitte la machine, jamais seulement « envoyer dans
 /// Notion ». Ce qui revient est entouré de `[CONTENU EXTERNE]`.
-fn notion_outil(name: &str, a: &Value, host: &mut dyn Host) -> Result<String, String> {
+fn notion_outil(name: &str, a: &Value, cfg: &Config, host: &mut dyn Host) -> Result<String, String> {
     use crate::integrations::notion as nt;
     let entier = |k: &str, defaut: u64| a.get(k).and_then(Value::as_u64).unwrap_or(defaut) as usize;
     match name {
@@ -585,7 +585,14 @@ fn notion_outil(name: &str, a: &Value, host: &mut dyn Host) -> Result<String, St
         "notion_lire_page" => nt::Client::nouveau().and_then(|c| c.lire_page(arg(a, "page"))).map(external),
         "notion_requete_base" => nt::Client::nouveau().and_then(|c| c.requete_base(arg(a, "base"), arg(a, "propriete"), arg(a, "valeur"), entier("nombre", 20))).map(external),
         "notion_creer_page" => {
-            let (parent, titre, contenu) = (arg(a, "parent"), arg(a, "titre"), arg(a, "contenu"));
+            let (titre, contenu) = (arg(a, "titre"), arg(a, "contenu"));
+            // Sans destination précise, celle de l'onglet Intégrations : c'est ce qui permet de
+            // ranger une capture en un geste. Rien n'est deviné si elle est vide non plus —
+            // mieux vaut une question qu'une page créée au mauvais endroit.
+            let parent = if arg(a, "parent").trim().is_empty() { cfg.notion_base.as_str() } else { arg(a, "parent") };
+            if parent.trim().is_empty() {
+                return Err(t!("aucune destination : donne « parent », ou renseigne la base par défaut dans l'onglet Intégrations de la bulle").to_string());
+            }
             let c = nt::Client::nouveau()?;
             if !host.confirm(&nt::apercu_ecriture(titre, contenu, parent)) {
                 return Ok("Refusé par l'utilisateur.".into());
@@ -1249,6 +1256,40 @@ mod tests {
             // Le jeton ne doit jamais se retrouver dans ce que lit le modèle.
             assert!(!r.contains("ntn_") && !r.contains("secret_"), "{nom} : {r}");
         }
+    }
+
+    #[test]
+    fn a_default_database_stands_in_for_a_missing_parent() {
+        /// Un hôte qui accepte tout : on veut savoir s'il a été sollicité, pas ce qu'il répond.
+        struct H(usize);
+        impl Host for H {
+            fn confirm(&mut self, _: &str) -> bool {
+                self.0 += 1;
+                true
+            }
+            fn event(&mut self, _: Event) {}
+        }
+        // Sans jeton, la suite ne peut pas aller plus loin que la construction du client — et
+        // c'est précisément ce qu'on mesure : jusqu'où l'outil s'arrête, et pourquoi.
+        if crate::cles::notion_configure() {
+            return;
+        }
+        // Ni « parent » ni base par défaut : rien n'est envoyé, et l'outil dit où régler ça.
+        let mut h = H(0);
+        let r = execute("notion_creer_page", &json!({"titre": "t", "contenu": "c"}), &Config::default(), &mut h);
+        assert!(r.starts_with("ERREUR"), "{r}");
+        assert!(r.contains("Intégrations"), "l'erreur doit dire où régler la base par défaut : {r}");
+        assert_eq!(h.0, 0, "une page sans destination ne se demande même pas");
+
+        // Une base par défaut renseignée : la destination est trouvée, il ne manque plus que le
+        // jeton. Autrement dit le repli a bien eu lieu, et « parent » reste prioritaire.
+        let mut cfg = Config::default();
+        cfg.notion_base = "https://www.notion.so/Mes-Notes-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d".into();
+        let mut h = H(0);
+        let r = execute("notion_creer_page", &json!({"titre": "t", "contenu": "c"}), &cfg, &mut h);
+        assert!(!r.contains("aucune destination"), "la base par défaut n'a pas servi : {r}");
+        assert!(r.contains("jeton"), "il ne devrait plus manquer que le jeton : {r}");
+        assert_eq!(h.0, 0, "rien à accepter tant que le jeton manque");
     }
 
     #[test]
