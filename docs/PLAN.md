@@ -101,7 +101,7 @@ Le maki, la physique, les 6 espèces, le rendu tiny-skia · `regles.rs` + `auton
 
 | Étape | Livrable | Vérifiable sur Linux ? | État |
 |---|---|---|---|
-| **0 — Socle** | `src/os/`, `Cargo.toml` découpé par cible, canal portable, **job CI `windows-latest`** | ✅ oui | 🟡 entamée : job CI en place, `Cargo.toml` découpé par cible |
+| **0 — Socle** | `src/os/`, `Cargo.toml` découpé par cible, canal portable, **job CI `windows-latest`** | ✅ oui | 🟡 **bien avancée** : `src/os/` livré (9 concerns), `Cargo.toml` découpé, AT-SPI et GNOME ont leur jumeau, 67 → 52 erreurs Windows. Reste l'affichage et le canal IPC (§10) |
 | **1 — MVP Windows** | `mascot/win32.rs`, Named Pipes, Credential Manager, outils de base | ⚠️ compile via CI | ⬜ |
 | **2 — Parité Windows** | discrétion, `controle.rs`, UI Automation, capture écran, Terminal, auto-update `.exe` | ⚠️ compile via CI | ⬜ |
 | **3 — Notion natif** | `src/integrations/notion.rs`, 6 outils IA, accueil matinal, `/notion`, cache FTS5, onglet Intégrations | ✅ **oui, entièrement** | 🟢 **6 outils + CLI + onglet Intégrations livrés, CI verte** ; restent accueil matinal, `/notion`, cache FTS5 |
@@ -171,3 +171,51 @@ Tu as demandé les widgets de verrouillage de Windows, et même l'écran de verr
 Prendre **1 + 2 + 3 + 4 + 5** comme « intégration native à 100 % avec beaucoup d'options », laisser de côté le dessin direct sur l'écran de verrouillage — pas par manque d'ambition : Windows le refuse, et ta règle de sécurité le refuse aussi. Les notifications sur l'écran de verrouillage donnent l'essentiel, l'information utile visible sans déverrouiller ; l'économiseur d'écran donne le maki en plein écran.
 
 **Ordre concret :** étapes 0 → 1 → 2 d'abord (rien de tout ceci n'existe sans le portage), puis dans l'étape 2 : toasts (1), barre des tâches (4), liste de sauts (5) ; enfin le widget de bureau (3) et l'économiseur d'écran (2), qui sont du dessin pur et se greffent sur `mascot/win32.rs`.
+
+---
+
+## 10. Où en est le portage Windows
+
+Le job CI `windows` compte les erreurs de `cargo check --target x86_64-pc-windows-msvc` et
+publie la liste sur la demande de fusion. C'est la seule mesure fiable d'ici : **cargo n'est pas
+installé dans cet espace de travail** et ne peut pas l'être, donc rien ne peut être compilé ni
+testé localement. Chaque chiffre ci-dessous vient d'un rapport de CI, pas d'une estimation.
+
+| Envoi | Erreurs | Ce qui a changé |
+|---|---|---|
+| `65571f2` | 67 | `Cargo.toml` découpé par cible : les 9 crates Linux sont sous `[target.'cfg(target_os = "linux")'.dependencies]` |
+| `1d9cf54` | 67 | `src/os/` : les droits POSIX, `prctl`, `setsid`, `exec()`, `ioprio` et les chemins en octets passent par le socle (les erreurs « cannot find `unix` in `os` » tombent de 10 à 1) |
+| `f71d76b` | **52** | AT-SPI et GNOME ont leur jumeau hors Linux ; `notify-rust` passe par le socle |
+
+### Ce qui reste (52 erreurs, 6 fichiers)
+
+| Fichier | Erreurs | Ce qu'il faut | Étape |
+|---|---|---|---|
+| `mascot/x11.rs` | 24 | Module X11 entier, à ne compiler que sous Linux | 1 |
+| `mascot/mod.rs` | 15 | Le backend Wayland à séparer du dessin, qui lui est portable (`tiny-skia`) | 1 |
+| `fichiers.rs` | 6 | Le portail de fichiers passe par D-Bus : jumeau comme pour `gnome` | 1 |
+| `bureau.rs` | 5 | D-Bus aussi (moniteurs `gdbus`) : jumeau | 1 |
+| `ipc.rs` | 1 | `UnixListener` → tube nommé `\\.\pipe\lkatta-<sid>` | 1 |
+| `daemon.rs` | 1 | `calloop` vient de `smithay-client-toolkit` : canal portable | 1 |
+
+Toutes sont de l'étape 1, et toutes se traitent par le même moyen que celui déjà éprouvé sur
+`atspi` et `gnome` : **un jumeau choisi par `cfg` dans `main.rs`, même nom de module, donc aucun
+site d'appel à modifier.** Le code Linux reste inchangé, ce qui est la raison pour laquelle la CI
+Linux reste verte à chaque envoi.
+
+### Une contrainte qui borne l'étape 1
+
+Le backend Win32 (`UpdateLayeredWindow` pour la bulle, Credential Manager pour les secrets,
+`RegisterHotKey` pour le raccourci global) demande les liaisons `windows` ou `windows-sys`.
+**Ajouter une dépendance modifie `Cargo.lock`, et ce fichier ne peut pas être régénéré d'ici.**
+La CI tourne en `--locked` : un `Cargo.lock` écrit à la main la ferait échouer.
+
+Deux façons de s'en sortir, à choisir :
+
+1. Lancer `cargo add windows-sys --features …` localement, une seule fois, et m'envoyer le
+   `Cargo.lock` résultant. C'est la plus sûre.
+2. Que je recalcule le `Cargo.lock` à la main depuis les index de crates.io. Faisable mais
+   fragile, et une erreur se paierait en cycles de CI plutôt qu'en secondes.
+
+En attendant, tout ce qui peut se faire **sans** dépendance nouvelle est fait — c'est le cas du
+socle entier, `std::os::windows::*` étant dans la bibliothèque standard.
