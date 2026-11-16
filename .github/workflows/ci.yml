@@ -23,6 +23,12 @@ concurrency:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    # Pour déposer les erreurs de compilation sur la demande de fusion quand ça échoue :
+    # le journal complet d'un run n'est lisible que sur un hôte à part, et un contributeur
+    # (ou un agent) n'y a pas toujours accès.
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Dépendances de compilation
@@ -32,9 +38,29 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Tests
-        run: cargo test --locked
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked 2>&1 | tee sortie-tests.log
       - name: Avertissements du compilateur
-        run: RUSTFLAGS="-D warnings" cargo build --locked
+        shell: bash
+        run: |
+          set -o pipefail
+          RUSTFLAGS="-D warnings" cargo build --locked 2>&1 | tee sortie-compile.log
+      - name: Déposer les erreurs sur la demande de fusion
+        if: failure() && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          {
+            echo "### Erreurs de compilation ou de tests (${GITHUB_SHA::7})"
+            echo '```'
+            grep -hE '^(error|warning)(\[E?[0-9]*\])?:|^ *--> |^test .* FAILED|^failures:' sortie-tests.log sortie-compile.log 2>/dev/null | head -100
+            echo '```'
+          } > erreurs.md
+          gh pr comment "$PR" --body-file erreurs.md
 
   # Reconnaissance Windows : ce que le portage natif (docs/PLAN.md, étape 0) devra rendre
   # compilable. `continue-on-error` pour l'instant — les crates Wayland/X11 ne se construisent
