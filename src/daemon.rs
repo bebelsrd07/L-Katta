@@ -21,7 +21,10 @@ pub fn run() -> Result<(), String> {
     // Index des fichiers (fil discret) : se coupe dans les réglages (« index = false »).
     crate::index::surveiller();
 
-    let (tx, rx) = smithay_client_toolkit::reexports::calloop::channel::channel::<Msg>();
+    // Le canal par le socle : sous Linux le récepteur est une source calloop que la boucle
+    // Wayland insère, ailleurs c'est un `mpsc` que l'affichage sonde. Les fils du démon, eux,
+    // ne voient que `clone()` et `send()`, qui ont la même forme des deux côtés.
+    let (tx, rx) = crate::os::canal::paire::<Msg>();
 
     // Socket de commande.
     {

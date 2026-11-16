@@ -81,6 +81,15 @@ pub const T: &[(&str, &str)] = &[
     ("nouveau binaire inutilisable : {}", "new binary unusable: {}"),
     ("le nouveau binaire ne donne pas la version attendue", "the new binary doesn't report the expected version"),
     ("nouvelle AppImage inutilisable : {}", "new AppImage unusable: {}"),
+    ("les notifications du bureau ne sont pas encore câblées sur ce système", "desktop notifications are not wired up on this system yet"),
+    ("l'accessibilité du bureau n'est pas encore câblée sur ce système", "desktop accessibility is not wired up on this system yet"),
+    ("l'extension GNOME de L Katta ne sert que sous GNOME Shell", "L Katta's GNOME extension only works under GNOME Shell"),
+    ("la fenêtre « Ouvrir » du système n'est pas encore câblée ici", "the system's Open dialog is not wired up here yet"),
+    // La boîte de dialogue Windows (portail_ailleurs.rs) et le presse-papiers Windows
+    // (clipboard.rs) : les deux parlent au système directement, donc leurs échecs sont des codes.
+    ("la fenêtre « Ouvrir » du système a échoué (code {})", "the system's Open dialog failed (code {})"),
+    ("Tous les fichiers", "All files"),
+    ("le presse-papiers est tenu par une autre application", "the clipboard is held by another application"),
     ("la nouvelle AppImage ne donne pas la version attendue", "the new AppImage doesn't report the expected version"),
     // Santé de la machine (sante.rs)
     ("Disque presque plein", "Disk almost full"),

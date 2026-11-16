@@ -43,6 +43,11 @@ pub struct Config {
     pub agenda: Vec<String>,
     /// Carnets d'adresses : fichiers vCard (.vcf).
     pub contacts: Vec<String>,
+    /// Base (ou page) Notion par défaut : adresse ou identifiant collé dans l'onglet
+    /// Intégrations. Sert de destination à une capture rapide et de repli à `notion_creer_page`
+    /// quand le modèle ne précise pas où ranger la page. Vide : rien n'est envoyé nulle part,
+    /// l'outil demande. Le jeton, lui, reste dans le trousseau — jamais dans ce fichier.
+    pub notion_base: String,
     pub alertes: Alertes,
 }
 
@@ -193,6 +198,7 @@ impl Default for Config {
             mail: vec![],
             agenda: vec![],
             contacts: vec![],
+            notion_base: String::new(),
             alertes: Alertes::default(),
         }
     }

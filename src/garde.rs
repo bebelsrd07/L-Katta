@@ -39,10 +39,9 @@ fn relancer(mo: u64) {
     }
     let Ok(exe) = std::env::current_exe() else { std::process::exit(1) };
     let args: Vec<String> = std::env::args().skip(1).collect();
-    use std::os::unix::process::CommandExt;
-    let err = std::process::Command::new(exe).args(args).exec();
-    eprintln!("lkatta : relance impossible ({err}), arrêt.");
-    std::process::exit(1);
+    // Ne revient pas : sur Unix le processus est remplacé en place, sur Windows la nouvelle
+    // instance est lancée puis celle-ci se termine (src/os/mod.rs).
+    crate::os::relancer(&exe, &args)
 }
 
 #[cfg(test)]

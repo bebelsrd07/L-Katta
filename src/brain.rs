@@ -564,20 +564,14 @@ fn is_connect_error(e: &ureq::Error) -> bool {
 
 /// Démarre un moteur local détaché et attend qu'il réponde (20 s au plus).
 fn start_engine(m: &Moteur) -> Result<(), String> {
-    use std::os::unix::process::CommandExt;
     let log = paths::data_dir().join("moteur.log");
     let _ = std::fs::create_dir_all(paths::data_dir());
     let out = std::fs::OpenOptions::new().create(true).append(true).open(&log).map_err(|e| e.to_string())?;
     let err = out.try_clone().map_err(|e| e.to_string())?;
     let mut cmd = crate::hote::commande("sh");
     cmd.args(["-c", &m.demarrer]).stdin(std::process::Stdio::null()).stdout(out).stderr(err);
-    // Nouveau groupe de session : le moteur survit au panneau.
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
-    }
+    // Sa propre session : le moteur survit au panneau (sur Windows, processus détaché).
+    crate::os::detacher(&mut cmd);
     cmd.spawn().map_err(|e| t!("démarrage impossible : {}", e))?;
     let agent: ureq::Agent =
         ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(2))).build().into();

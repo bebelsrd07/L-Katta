@@ -41,13 +41,14 @@ pub fn runtime_dir() -> PathBuf {
 /// Dossiers de L Katta lisibles par l'utilisateur seul (discussions, index, captures,
 /// presse-papiers : rien pour les autres comptes de la machine).
 pub fn fermer_dossiers() {
-    use std::os::unix::fs::PermissionsExt;
+    // Les droits eux-mêmes sont dans le socle : 0700/0600 sur Linux, et sur Windows l'ACL
+    // héritée de %LOCALAPPDATA% (voir src/os/mod.rs).
     for d in [config_dir(), data_dir(), data_dir().join("captures"), data_dir().join("fils")] {
         let _ = std::fs::create_dir_all(&d);
-        let _ = std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700));
+        let _ = crate::os::restreindre_dossier(&d);
     }
     for f in ["moteur.log", "relance.log", "garde-memoire.log"] {
-        let _ = std::fs::set_permissions(data_dir().join(f), std::fs::Permissions::from_mode(0o600));
+        let _ = crate::os::restreindre_fichier(&data_dir().join(f));
     }
 }
 
@@ -74,23 +75,17 @@ pub fn home_dir() -> PathBuf {
     home()
 }
 
+/// Fait mourir le processus lancé avec L Katta (moniteurs `gdbus monitor` : sinon ils restent
+/// orphelins à chaque relance). Relais vers le socle, gardé ici parce que c'est `paths` qui
+/// sait déjà où se trouve le programme à relancer.
+pub fn mourir_avec_parent(cmd: &mut std::process::Command) -> &mut std::process::Command {
+    crate::os::mourir_avec_parent(cmd)
+}
+
 /// Chemin du programme à relancer : l'AppImage si on tourne depuis elle ; sinon le binaire
 /// courant (sans le suffixe « (deleted) » que Linux ajoute quand le fichier a été remplacé
 /// pendant qu'il tournait, par une mise à jour ou une recompilation), ou à défaut celui
 /// installé dans ~/.local/bin.
-/// Le processus lancé meurt avec L Katta (moniteurs `gdbus monitor` : sinon ils restent
-/// orphelins à chaque relance).
-pub fn mourir_avec_parent(cmd: &mut std::process::Command) -> &mut std::process::Command {
-    use std::os::unix::process::CommandExt;
-    // SAFETY : prctl est sûr entre fork et exec (pas d'allocation).
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-            Ok(())
-        })
-    }
-}
-
 pub fn self_exe() -> PathBuf {
     if let Some(a) = std::env::var_os("APPIMAGE") {
         return PathBuf::from(a);
@@ -144,7 +139,6 @@ pub fn expand(p: &str) -> PathBuf {
 /// Écrit un fichier de façon atomique, droits 600 (données personnelles).
 pub fn write_private(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -155,7 +149,9 @@ pub fn write_private(path: &std::path::Path, contents: &[u8]) -> std::io::Result
     let tmp = path.with_file_name(format!(".{nom}.{}-{}.tmp", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
     let _ = std::fs::remove_file(&tmp);
     {
-        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+        // `options_privees()` : le temporaire naît déjà privé, il n'y a pas de fenêtre où un
+        // autre compte pourrait lire ce qui vient d'être écrit.
+        let mut f = crate::os::options_privees().write(true).create_new(true).open(&tmp)?;
         if let Err(e) = f.write_all(contents) {
             let _ = std::fs::remove_file(&tmp);
             return Err(e);

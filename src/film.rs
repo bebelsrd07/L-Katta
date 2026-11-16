@@ -383,6 +383,7 @@ fn scenario() -> Scenario {
         (2, "Son allure : six lémuriens, sa taille, le thème, où il se promène.", 3.4),
         (3, "Démarrage, mises à jour vérifiées, index des fichiers : tout se coupe d'un clic.", 3.4),
         (4, "Mails, agenda, contacts : les mots de passe vont dans le trousseau du système.", 3.6),
+        (6, "Intégrations : le jeton Notion va dans le trousseau, et un seul interrupteur le coupe.", 3.6),
     ] {
         s.ligne(ligne);
         s.a(move |f| {

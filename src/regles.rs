@@ -35,6 +35,9 @@ pub struct Regles {
     pub terminal: bool,
     /// Manipuler l'ordinateur : fenêtres, clavier, son, lecteurs, luminosité.
     pub controle: bool,
+    /// Lire et écrire dans Notion. Coupé, les six outils `notion_*` disparaissent et sont
+    /// refusés — l'interrupteur du panneau écrit ici, donc il est appliqué par le code.
+    pub notion: bool,
     /// Fenêtres où il ne tape jamais rien ni n'envoie de touches (morceau du titre ou de l'application).
     pub fenetres_interdites: Vec<String>,
     /// Combinaisons de touches jamais envoyées, en plus de celles toujours refusées
@@ -63,6 +66,7 @@ impl Default for Regles {
             envoyer_mails: true,
             terminal: true,
             controle: true,
+            notion: true,
             fenetres_interdites: [
                 "keepass", "bitwarden", "1password", "kwalletmanager", "seahorse", "mots de passe", "password",
                 "banque", "bank", "bni", "bfv", "boa madagascar", "paypal", "mvola", "orange money", "airtel money",
@@ -130,6 +134,7 @@ pub fn merge(sys: &Regles, user: &Regles) -> Regles {
         envoyer_mails: sys.envoyer_mails && user.envoyer_mails,
         terminal: sys.terminal && user.terminal,
         controle: sys.controle && user.controle,
+        notion: sys.notion && user.notion,
         fenetres_interdites: union(&sys.fenetres_interdites, &user.fenetres_interdites),
         touches_interdites: union(&sys.touches_interdites, &user.touches_interdites),
     }
@@ -150,6 +155,68 @@ pub fn load() -> Regles {
         Some(sys) => merge(&sys, &user),
         None => user,
     }
+}
+
+/// Bascule l'interrupteur Notion dans le `regles.toml` de l'utilisateur.
+///
+/// Une seule ligne est touchée. Ce fichier s'écrit à la main et se commente : le régénérer
+/// depuis la structure écraserait les commentaires et les réglages que ce code ne connaît pas.
+///
+/// Rien d'autre que `notion` ne passe par ici. Ni `internet`, ni `confirmer_tout`, ni les
+/// listes d'interdits : l'application n'offre aucun chemin pour lever une règle de sécurité,
+/// seulement pour couper une intégration. Si l'administrateur a coupé Notion dans
+/// `/etc/lkatta/regles.toml`, ce réglage ne change rien — `merge` fait un `&&`.
+pub fn set_notion(actif: bool) -> Result<(), String> {
+    let chemin = paths::config_dir().join("regles.toml");
+    // `load()` crée le fichier complet, en-tête et commentaires compris, s'il manque. Partir de
+    // là plutôt que d'une page blanche : l'utilisateur qui coupe Notion se retrouverait sinon
+    // avec un fichier d'une ligne, sans les autres règles à portée de main.
+    let _ = load();
+    let avant = std::fs::read_to_string(&chemin).unwrap_or_default();
+    let apres = ligne_basculee(&avant, "notion", actif);
+    paths::write_private(&chemin, apres.as_bytes()).map_err(|e| e.to_string())
+}
+
+/// L'administrateur de la machine a-t-il coupé Notion pour tout le monde ?
+///
+/// `merge` fait un `&&` entre les deux niveaux : l'interrupteur de l'utilisateur ne peut donc
+/// pas lever une interdiction d'administration. Le panneau le dit au lieu de proposer un
+/// réglage qui ne changerait rien.
+pub fn notion_coupe_par_admin() -> bool {
+    read_toml(&system_dir().join("regles.toml")).is_some_and(|sys| !sys.notion)
+}
+
+/// Le texte d'un fichier TOML avec `cle` fixé à `valeur` : la ligne existante est remplacée,
+/// sinon la clé est ajoutée à la fin. Tout le reste, commentaires compris, est recopié tel quel.
+fn ligne_basculee(texte: &str, cle: &str, valeur: bool) -> String {
+    let mut trouve = false;
+    let mut out: Vec<String> = texte
+        .lines()
+        .map(|l| {
+            // Une ligne de commentaire n'est pas un réglage, même si elle cite la clé.
+            if l.trim_start().starts_with('#') {
+                return l.to_string();
+            }
+            // `notion_base` ne doit pas passer pour `notion` : le signe `=` est exigé juste
+            // après la clé. L'indentation d'origine est gardée, pas un commentaire de fin.
+            match l.trim_start().strip_prefix(cle).map(str::trim_start) {
+                Some(reste) if reste.starts_with('=') => {
+                    trouve = true;
+                    format!("{}{cle} = {valeur}", &l[..l.len() - l.trim_start().len()])
+                }
+                _ => l.to_string(),
+            }
+        })
+        .collect();
+    if !trouve {
+        if out.last().is_some_and(|l| !l.trim().is_empty()) {
+            out.push(String::new());
+        }
+        out.push(format!("{cle} = {valeur}"));
+    }
+    let mut s = out.join("\n");
+    s.push('\n');
+    s
 }
 
 /// Texte des règles pour le prompt système (machine puis utilisateur, puis interdits appliqués).
@@ -176,7 +243,7 @@ pub fn prompt_block(prenom: &str) -> String {
     if !r.outils_interdits.is_empty() {
         out.push_str(&format!("- Outils désactivés : {}\n", r.outils_interdits.join(", ")));
     }
-    for (ok, what) in [(r.internet, "Internet"), (r.lire_mails, "lecture des mails"), (r.envoyer_mails, "envoi de mails"), (r.terminal, "pilotage du terminal")] {
+    for (ok, what) in [(r.internet, "Internet"), (r.lire_mails, "lecture des mails"), (r.envoyer_mails, "envoi de mails"), (r.terminal, "pilotage du terminal"), (r.notion, "Notion")] {
         if !ok {
             out.push_str(&format!("- {what} : INTERDIT\n"));
         }
@@ -326,6 +393,8 @@ impl Regles {
             "mails" | "mail_lire" => self.lire_mails,
             "mail_envoyer" => self.envoyer_mails,
             "terminal_executer" | "terminal_lire" | "terminal_ecrire" => self.terminal,
+            // Les six outils Notion tombent d'un coup avec l'interrupteur.
+            n if n.starts_with("notion_") => self.notion,
             _ => true,
         };
         if ok { Ok(()) } else { Err(format!("« {name} » est interdit par les règles strictes")) }
@@ -348,6 +417,65 @@ mod tests {
         assert!(r.command_refusal("git push origin main").is_some());
         assert!(r.command_refusal("ls -la").is_none());
         assert!(r.command_refusal("cat ~/.ssh/id_ed25519").is_some());
+    }
+
+    #[test]
+    fn the_notion_switch_cuts_the_six_tools_at_once() {
+        // Allumé par défaut : l'utilisateur n'a rien à faire pour s'en servir.
+        let r = Regles::default();
+        assert!(r.notion);
+        for t in ["notion_chercher", "notion_lire_page", "notion_requete_base", "notion_creer_page", "notion_ajouter_blocs", "notion_modifier_proprietes"] {
+            assert!(r.tool_allowed(t).is_ok(), "{t} devrait passer");
+        }
+        // Coupé : les six tombent, et l'administrateur seul suffit à les couper pour tous.
+        let coupe = merge(&Regles { notion: false, ..Regles::default() }, &Regles::default());
+        assert!(!coupe.notion);
+        assert!(coupe.tool_allowed("notion_chercher").is_err());
+        assert!(coupe.tool_allowed("notion_modifier_proprietes").is_err());
+        // Ce qui n'est pas Notion ne bouge pas.
+        assert!(coupe.tool_allowed("recherche_web").is_ok());
+        // Un outil dont le nom commence pareil n'échappe pas à l'interrupteur.
+        assert!(coupe.tool_allowed("notion_autre_chose").is_err());
+        // Un regles.toml écrit avant l'existence de cet interrupteur le garde allumé :
+        // `#[serde(default)]` comble le champ manquant depuis Default.
+        let ancien: Regles = toml::from_str("internet = true\n").unwrap();
+        assert!(ancien.notion);
+    }
+
+    #[test]
+    fn flipping_notion_touches_one_line_and_keeps_the_rest() {
+        // Ce fichier s'écrit à la main : commentaires et autres réglages doivent survivre.
+        let avant = "# Mes règles\ninternet = true\nnotion = true  # pourquoi\noutils_interdits = [\"mail_envoyer\"]\n";
+        let apres = ligne_basculee(avant, "notion", false);
+        assert!(apres.contains("# Mes règles"), "{apres}");
+        assert!(apres.contains("internet = true"), "{apres}");
+        assert!(apres.contains("notion = false"), "{apres}");
+        assert!(apres.contains("outils_interdits = [\"mail_envoyer\"]"), "{apres}");
+        // Une seule ligne « notion = … », pas deux empilées à chaque bascule.
+        assert_eq!(apres.lines().filter(|l| l.trim_start().starts_with("notion")).count(), 1, "{apres}");
+        // Et le résultat se relit comme du TOML qui dit bien `false`.
+        let relues: Regles = toml::from_str(&apres).unwrap();
+        assert!(!relues.notion && relues.internet);
+
+        // Clé absente : elle est ajoutée, sans écraser le reste.
+        let ajout = ligne_basculee("internet = true\n", "notion", false);
+        assert!(!toml::from_str::<Regles>(&ajout).unwrap().notion);
+        assert!(ajout.contains("internet = true"), "{ajout}");
+
+        // Fichier vide : la clé seule, lisible.
+        assert!(toml::from_str::<Regles>(&ligne_basculee("", "notion", true)).unwrap().notion);
+
+        // `notion_base` n'est pas `notion` : sans le signe `=` juste après la clé, on
+        // basculerait le mauvais réglage — ici la ligne reste intacte et la clé est ajoutée.
+        let proche = ligne_basculee("notion_base = \"abc\"\n", "notion", false);
+        assert!(proche.contains("notion_base = \"abc\""), "{proche}");
+        assert!(proche.contains("\nnotion = false"), "{proche}");
+        assert!(!toml::from_str::<Regles>(&proche).unwrap().notion);
+
+        // Une ligne de commentaire qui cite la clé n'est pas un réglage.
+        let commentaire = ligne_basculee("# notion = true, à couper un jour\n", "notion", false);
+        assert!(commentaire.contains("# notion = true, à couper un jour"), "{commentaire}");
+        assert!(commentaire.contains("\nnotion = false"), "{commentaire}");
     }
 
     #[test]

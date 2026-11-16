@@ -23,6 +23,12 @@ concurrency:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    # Pour déposer les erreurs de compilation sur la demande de fusion quand ça échoue :
+    # le journal complet d'un run n'est lisible que sur un hôte à part, et un contributeur
+    # (ou un agent) n'y a pas toujours accès.
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Dépendances de compilation
@@ -32,9 +38,187 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Tests
-        run: cargo test --locked
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked 2>&1 | tee sortie-tests.log
       - name: Avertissements du compilateur
-        run: RUSTFLAGS="-D warnings" cargo build --locked
+        shell: bash
+        run: |
+          set -o pipefail
+          RUSTFLAGS="-D warnings" cargo build --locked 2>&1 | tee sortie-compile.log
+      - name: Déposer les erreurs sur la demande de fusion
+        if: failure() && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # `set +e` : grep renvoie 1 quand il ne trouve rien, et un `| head` renvoie SIGPIPE
+          # — sous le `-eo pipefail` de `shell: bash`, l'un ou l'autre ferait échouer ce pas,
+          # qui est justement là pour rendre compte d'un échec.
+          # On ne devine pas la forme des messages : on prend toute ligne qui parle d'erreur,
+          # PUIS la fin du journal, où se trouve de toute façon le résumé de l'échec.
+          set +e
+          for f in sortie-tests.log sortie-compile.log; do
+            test -f "$f" || continue
+            echo "===== $f : lignes en cause ====="
+            grep -inE 'error|warning: unused|panicked|FAILED|^failures|cannot find|expected|mismatched|not found in|no method|no function|unresolved|trait bound|borrowed|moved value|E0[0-9]{3}' "$f" | head -120
+            echo
+            echo "===== $f : 150 dernières lignes ====="
+            tail -150 "$f"
+            echo
+          done > erreurs-corps.txt
+          head -400 erreurs-corps.txt > erreurs-coupe.txt
+          wc -c < erreurs-coupe.txt > erreurs-nombre.txt
+          set -e
+          # `GITHUB_SHA` d'un événement pull_request est le commit de fusion éphémère que
+          # GitHub fabrique pour essayer la demande : il n'est dans aucun historique local,
+          # donc personne ne peut le retrouver. On cite la tête du PR à la place.
+          TETE='${{ github.event.pull_request.head.sha }}'
+          TETE="${TETE:-$GITHUB_SHA}"
+          {
+            echo "### Erreurs de compilation ou de tests (${TETE::7})"
+            echo
+            echo "$(cat erreurs-nombre.txt) octet(s) de journal :"
+            echo
+            echo '```'
+            cat erreurs-coupe.txt
+            echo '```'
+          } > erreurs.md
+          gh api -X POST "repos/$REPO/issues/$PR/comments" -F body=@erreurs.md
+
+  # Reconnaissance Windows : ce que le portage natif (docs/PLAN.md, étape 0) devra rendre
+  # compilable. `continue-on-error` pour l'instant — les crates Wayland/X11 ne se construisent
+  # pas encore pour Windows, et c'est justement l'objet de l'étape 0 (les passer sous
+  # `[target.'cfg(target_os = "linux")'.dependencies]`). Le journal dit lesquelles bloquent.
+  # Il deviendra bloquant dès que `cargo check` passera : ne pas le retirer avant.
+  windows:
+    runs-on: windows-latest
+    continue-on-error: true
+    # Même raison que pour `tests` : publier le relevé sur la demande de fusion, parce que le
+    # journal et l'artefact d'un run ne se téléchargent que depuis des hôtes à part.
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      # `build --release` et non `check` : le but est de produire le .exe, pas seulement de
+      # savoir si les types tombent juste. Le journal garde exactement la même forme, donc le
+      # relevé d'erreurs ci-dessous fonctionne pareil.
+      - name: Construire pour Windows
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc 2>&1 | Tee-Object -FilePath windows-check.log
+      # Le même relevé que le commentaire, mais dans la page du run pour qui la regarde.
+      - name: Résumé de la compilation
+        if: always()
+        run: |
+          Select-String -Path windows-check.log -Pattern '^error' | Measure-Object | ForEach-Object { "erreurs : $($_.Count)" }
+          Select-String -Path windows-check.log -Pattern '^warning' | Measure-Object | ForEach-Object { "avertissements : $($_.Count)" }
+          Select-String -Path windows-check.log -Pattern 'could not compile' | Select-Object -First 5 | ForEach-Object { $_.Line }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: windows-check-log
+          path: windows-check.log
+          if-no-files-found: ignore
+      # Le livrable. `warn` et non `error` : si la compilation échoue, le pas « Construire pour
+      # Windows » a déjà échoué bruyamment, et faire échouer aussi celui-ci pour la même cause ne
+      # donnerait qu'une deuxième panne à lire. Si elle réussit, le binaire est là — sinon c'est
+      # que le chemin a changé, et l'avertissement le dit.
+      - name: Publier lkatta.exe
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: lkatta-windows-x64
+          path: target/x86_64-pc-windows-msvc/release/lkatta.exe
+          if-no-files-found: warn
+      # Le relevé est publié sur la demande de fusion : l'artefact ci-dessus ne se télécharge
+      # que depuis un hôte à part, et c'est lui qui dit quelles crates l'étape 0 devra passer
+      # sous `[target.'cfg(target_os = "linux")'.dependencies]`.
+      - name: Publier l'état du portage Windows
+        if: always() && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # `set +e` : grep renvoie 1 quand il ne trouve rien, et un `| head` renvoie SIGPIPE.
+          set +e
+          test -f windows-check.log || exit 0
+          # Tee-Object écrit en CRLF : sans les \r retirés, plus aucun motif ancré à la fin de
+          # ligne ne correspondrait.
+          tr -d '\r' < windows-check.log > journal.txt
+
+          # Les erreurs, chacune suivie de l'endroit du code qu'elles désignent. Sans la ligne
+          # `--> src/…`, on sait que ça casse mais on ne sait pas quoi fermer.
+          awk '/^error/{e=$0} /^ +--> /{if(e!=""){print e; print "  " $0; e=""}}' journal.txt | head -120 > erreurs.txt
+          grep -E '^error: aborting|could not compile' journal.txt | head -10 >> erreurs.txt
+          N_ERREURS=$(grep -cE '^error' journal.txt)
+
+          # Les avertissements disent autre chose, et c'est maintenant l'information la plus
+          # utile : une fonction « never used » sous Windows est une fonctionnalité qui n'y est
+          # pas encore branchée. Cette liste est donc l'état d'avancement réel du portage, et
+          # elle n'a rien à voir avec des erreurs — d'où deux sections séparées.
+          # Les `\` deviennent des `/` pour que les chemins se regroupent, et
+          # `src/mascot_win/../mascot/…` redevient `src/mascot/…` : c'est le `#[path]` du jumeau
+          # qui apparaît dans le diagnostic, pas un fichier qui existerait deux fois.
+          awk '/^warning:/{w=substr($0,10)} /^ +--> /{if(w!=""){sub(/^ +--> /,""); print $0 "  « " w " »"; w=""}}' journal.txt | sed -e 's|\\|/|g' -e 's|src/mascot_win/\.\./mascot/|src/mascot/|g' | sort | head -80 > avertissements.txt
+          N_AVERT=$(grep -cE '^warning' journal.txt)
+
+          # Le binaire, s'il est là. Sa taille n'a rien à voir avec le budget de RAM (~15 Mo,
+          # §2 du plan) : c'est celle du fichier sur le disque. Elle vaut d'être publiée quand
+          # même, à chaque run, parce qu'un bond soudain signale quelque chose — des symboles de
+          # débogage laissés, ou une dépendance entrée par accident.
+          EXE=target/x86_64-pc-windows-msvc/release/lkatta.exe
+          if [ -f "$EXE" ]; then
+            LIGNE_EXE="**lkatta.exe** : $(wc -c < "$EXE") octets, publié comme artefact \`lkatta-windows-x64\` du run."
+          else
+            LIGNE_EXE="**lkatta.exe** : absent, la compilation n'est pas allée au bout."
+          fi
+          set -e
+
+          # `GITHUB_SHA` d'un événement pull_request est le commit de fusion éphémère que GitHub
+          # fabrique pour essayer la demande : il n'est dans aucun historique local, donc personne
+          # ne peut le retrouver. On cite la tête du PR à la place.
+          TETE='${{ github.event.pull_request.head.sha }}'
+          TETE="${TETE:-$GITHUB_SHA}"
+          {
+            echo "### Portage Windows (${TETE::7})"
+            echo
+            echo "\`cargo build --release --target x86_64-pc-windows-msvc\` : ${N_ERREURS} erreur(s), ${N_AVERT} avertissement(s)."
+            echo
+            echo "$LIGNE_EXE"
+            echo
+            if [ "$N_ERREURS" -gt 0 ]; then
+              echo "**Ce qui empêche de compiler :**"
+              echo
+              echo '```'
+              cat erreurs.txt
+              echo '```'
+              echo
+            fi
+            echo "**Ce qui n'est pas encore câblé sous Windows** — code compilé mais jamais appelé sur cette cible :"
+            echo
+            echo '```'
+            if [ -s avertissements.txt ]; then cat avertissements.txt; else echo "  (rien : tout ce qui compile est utilisé)"; fi
+            echo '```'
+            echo
+            echo "**Fin du journal :**"
+            echo
+            echo '```'
+            tail -25 journal.txt
+            echo '```'
+          } > windows.md
+          # Un commentaire GitHub tient dans 65 536 caractères.
+          head -c 60000 windows.md > windows-corps.md
+          gh api -X POST "repos/$REPO/issues/$PR/comments" -F body=@windows-corps.md
 
   appimage:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'

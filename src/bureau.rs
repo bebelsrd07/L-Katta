@@ -47,6 +47,22 @@ impl Fenetre {
     }
 }
 
+/// Une fenêtre couvre-t-elle tout le moniteur ?
+///
+/// Les deux rectangles sont `(gauche, haut, droite, bas)`, dans le même repère. Une fenêtre
+/// **maximisée** s'arrête à la barre des tâches et ne couvre donc pas le moniteur entier : c'est
+/// toute la différence, et elle compte — comparer au mauvais rectangle ferait croire à L Katta que
+/// l'utilisateur est en plein écran dès qu'il agrandit une fenêtre, et le réduirait au silence pour
+/// un oui pour un non.
+///
+/// C'est du Rust pur et non un appel système pour que la règle soit testée sur toutes les cibles,
+/// y compris là où aucun moniteur ne peut la renseigner. Le `allow` n'est là que pour la CI Linux,
+/// qui compile avec `-D warnings` : hors Windows, seuls les essais l'appellent.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn couvre_tout(fenetre: (i32, i32, i32, i32), ecran: (i32, i32, i32, i32)) -> bool {
+    fenetre.0 <= ecran.0 && fenetre.1 <= ecran.1 && fenetre.2 >= ecran.2 && fenetre.3 >= ecran.3
+}
+
 const SCRIPT: &str = r#"// L Katta : signale la fenêtre active pour rester discret (chargé et retiré par L Katta).
 function signaler() {
     var w = workspace.activeWindow;
@@ -97,6 +113,9 @@ pub fn retirer_script() {
     let _ = qdbus(&["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", "lkatta"]);
 }
 
+/// Le service D-Bus que le script KWin appelle pour dire quelle fenêtre est active.
+/// Linux seulement : `zbus` n'est plus une dépendance que pour cette cible.
+#[cfg(target_os = "linux")]
 struct Service {
     tx: Box<dyn Fn(Msg) + Send + Sync>,
 }
@@ -110,6 +129,7 @@ pub fn pont_actif() -> bool {
     PONT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+#[cfg(target_os = "linux")]
 #[zbus::interface(name = "org.lkatta.Maki")]
 impl Service {
     /// La fenêtre active, en JSON (KWin envoie les nombres entiers en `int` : un seul texte
@@ -124,6 +144,7 @@ impl Service {
 }
 
 /// Démarre le service D-Bus (fil dédié) puis charge le script KWin.
+#[cfg(target_os = "linux")]
 pub fn demarrer(tx: impl Fn(Msg) + Send + Sync + 'static) {
     std::thread::spawn(move || {
         let r: zbus::Result<()> = zbus::block_on(async move {
@@ -143,6 +164,193 @@ pub fn demarrer(tx: impl Fn(Msg) + Send + Sync + 'static) {
             eprintln!("lkatta : service D-Bus indisponible ({e}) ; discrétion réduite");
         }
     });
+}
+
+/// Démarre la veille de la fenêtre active.
+///
+/// Sous Linux c'est le bureau qui pousse l'information (script KWin, extension GNOME) par D-Bus.
+/// Windows ne pousse rien à un fil qui n'a pas de fenêtre : la fenêtre de devant se demande au
+/// système — `GetForegroundWindow`, puis `GetWindowTextW`, `GetClassNameW` et `GetWindowRect`,
+/// toutes dans `user32`. Aucune dépendance nouvelle, comme le reste du backend Win32.
+///
+/// C'est donc un sondage et non une écoute. Toutes les 400 ms, ce fil compare à ce qu'il avait et
+/// n'envoie `Msg::Fenetre` qu'au changement : renvoyer la même fenêtre trois fois par seconde
+/// réveillerait la boucle du maki pour rien. 400 ms, c'est assez court pour que le maki descende
+/// d'une fenêtre qu'on vient de fermer sans que ça se voie comme un retard, et assez long pour que
+/// le fil dorme l'essentiel du temps.
+///
+/// L'alternative exacte est `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)`, une vraie notification
+/// sans sondage. Elle exige une boucle de messages dans le fil qui pose le hook — donc un fil de
+/// plus avec sa propre boucle — pour un renseignement qui change quelques fois par minute. Le
+/// sondage est retenu tant que 400 ms suffisent ; le choix est écrit ici pour rester visible.
+///
+/// Sur les autres systèmes (un macOS éventuel) rien n'est lancé et `pont_actif` reste faux : la
+/// discrétion de L Katta ne s'y applique pas. Renvoyer une fenêtre vide ferait croire que
+/// l'utilisateur ne fait rien, donc parler quand il faut se taire.
+#[cfg(not(target_os = "linux"))]
+pub fn demarrer(tx: impl Fn(Msg) + Send + Sync + 'static) {
+    #[cfg(windows)]
+    return win::demarrer(tx);
+    #[cfg(not(windows))]
+    let _ = tx;
+}
+
+/// La fenêtre de devant, demandée à Windows.
+#[cfg(windows)]
+mod win {
+    use std::time::Duration;
+
+    use crate::bureau::Fenetre;
+    use crate::ipc::Msg;
+
+    /// Le pas du sondage. Voir la doc de `demarrer` pour pourquoi 400 ms et pas une notification.
+    const PAS: Duration = Duration::from_millis(400);
+    /// Notre propre fenêtre, dont la classe est fixée dans `mascot_win/win32.rs`. Elle est
+    /// `NOACTIVATE`, donc elle ne passe normalement pas au premier plan — mais la reconnaître
+    /// coûte une comparaison, et évite que L Katta se cache de lui-même le jour où une de ses
+    /// fenêtres prend le clavier (la bulle de discussion le fera).
+    const NOTRE_CLASSE: &str = "LkattaMaki";
+    /// Un titre de fenêtre tient largement là-dedans ; au-delà, `GetWindowTextW` tronque.
+    const TAILLE_TEXTE: usize = 1024;
+    /// Le moniteur le plus proche, même si la fenêtre déborde ou est hors écran.
+    const MONITOR_DEFAULTTONEAREST: u32 = 2;
+
+    /// `RECT` du SDK : quatre entiers signés, dans cet ordre.
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Default)]
+    struct Rect {
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    }
+
+    /// `MONITORINFO` du SDK. `rc_monitor` est le moniteur entier, `rc_work` le moniteur moins la
+    /// barre des tâches : c'est la différence des deux qui distingue plein écran et maximisé.
+    ///
+    /// Nous ne lisons que `rc_monitor`. Les autres champs sont là parce que la structure est un
+    /// contrat : `GetMonitorInfoW` les écrit tous, et retirer `rc_work` décalerait `dw_flags` et
+    /// ferait lire n'importe quoi. D'où le `allow` — ce n'est pas du code mort, c'est de la place
+    /// réservée par l'API.
+    #[allow(dead_code)]
+    #[repr(C)]
+    struct InfoMoniteur {
+        cb_size: u32,
+        rc_monitor: Rect,
+        rc_work: Rect,
+        dw_flags: u32,
+    }
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetForegroundWindow() -> isize;
+        fn GetWindowTextW(fenetre: isize, texte: *mut u16, max: i32) -> i32;
+        fn GetClassNameW(fenetre: isize, nom: *mut u16, max: i32) -> i32;
+        fn GetWindowRect(fenetre: isize, r: *mut Rect) -> i32;
+        fn IsIconic(fenetre: isize) -> i32;
+        fn MonitorFromWindow(fenetre: isize, drapeaux: u32) -> isize;
+        fn GetMonitorInfoW(moniteur: isize, info: *mut InfoMoniteur) -> i32;
+    }
+
+    /// Démarre le fil de sondage. Comme le service D-Bus de Linux, il ne revient pas.
+    pub fn demarrer(tx: impl Fn(Msg) + Send + Sync + 'static) {
+        std::thread::spawn(move || {
+            let mut vu: Option<Fenetre> = None;
+            loop {
+                std::thread::sleep(PAS);
+                let Some(f) = active() else { continue };
+                if vu.as_ref() == Some(&f) {
+                    continue;
+                }
+                // L Katta sait maintenant quelle fenêtre est devant, donc la règle de discrétion
+                // s'applique : `pont_actif` devient vrai, c'est exactement ce qu'il dit.
+                super::PONT.store(true, std::sync::atomic::Ordering::Relaxed);
+                vu = Some(f.clone());
+                tx(Msg::Fenetre(f));
+            }
+        });
+    }
+
+    /// La fenêtre de premier plan, en pixels physiques et dans le repère de l'écran — les mêmes
+    /// coordonnées globales que le script KWin envoie sous Linux. La conversion vers le monde du
+    /// maki est faite par celui qui connaît sa zone de travail, pas ici.
+    fn active() -> Option<Fenetre> {
+        // SAFETY : le handle appartient au système, il n'y a rien à libérer.
+        let f = unsafe { GetForegroundWindow() };
+        // Réduite en icône : ce n'est pas une fenêtre devant l'utilisateur, et son rectangle ne
+        // veut plus rien dire (Windows la gare hors écran, à -32000).
+        if f == 0 || unsafe { IsIconic(f) } != 0 {
+            return None;
+        }
+        let classe = texte(f, true);
+        if classe == NOTRE_CLASSE {
+            return None;
+        }
+        let titre = texte(f, false);
+        let mut r = Rect::default();
+        // SAFETY : écrit un RECT dans notre variable, qui vit jusqu'à la fin de l'appel.
+        if unsafe { GetWindowRect(f, &mut r) } == 0 {
+            return None;
+        }
+        Some(Fenetre {
+            plein_ecran: couvre_le_moniteur(f, &r),
+            rect: (r.left as f32, r.top as f32, (r.right - r.left) as f32, (r.bottom - r.top) as f32),
+            classe,
+            titre,
+            // Un seul moniteur est pris en compte pour l'instant. Laisser l'écran vide fait que le
+            // maki ne compare pas les noms, au lieu de comparer et de toujours perdre.
+            ecran: String::new(),
+            // Coordonnées déjà dans celles du maki : aucune conversion d'échelle à faire.
+            scene: (0.0, 0.0),
+        })
+    }
+
+    /// Plein écran : la fenêtre couvre tout le moniteur, pas seulement sa zone de travail.
+    ///
+    /// Une fenêtre maximisée s'arrête à la barre des tâches, donc elle couvre `rc_work` et pas
+    /// `rc_monitor`. Toute la distinction tient là, et elle compte : comparer au mauvais rectangle
+    /// ferait croire à L Katta que l'utilisateur est en plein écran dès qu'il agrandit une fenêtre,
+    /// et le réduirait au silence pour un oui pour un non.
+    fn couvre_le_moniteur(f: isize, r: &Rect) -> bool {
+        let mut info = InfoMoniteur {
+            cb_size: std::mem::size_of::<InfoMoniteur>() as u32,
+            rc_monitor: Rect::default(),
+            rc_work: Rect::default(),
+            dw_flags: 0,
+        };
+        // SAFETY : `f` vient de `GetForegroundWindow` et n'est pas nul ; `MONITOR_DEFAULTTONEAREST`
+        // garantit un handle valable même si la fenêtre est hors écran.
+        let m = unsafe { MonitorFromWindow(f, MONITOR_DEFAULTTONEAREST) };
+        // SAFETY : `info` est à nous et vit jusqu'à la fin de l'appel.
+        if m == 0 || unsafe { GetMonitorInfoW(m, &mut info) } == 0 {
+            // Sans renseignement sur le moniteur, mieux vaut dire « pas plein écran » : se taire à
+            // tort est plus gênant que parler à tort.
+            return false;
+        }
+        super::couvre_tout(
+            (r.left, r.top, r.right, r.bottom),
+            (info.rc_monitor.left, info.rc_monitor.top, info.rc_monitor.right, info.rc_monitor.bottom),
+        )
+    }
+
+    /// Le titre (`classe` faux) ou la classe (`classe` vrai) de la fenêtre.
+    fn texte(f: isize, classe: bool) -> String {
+        let mut tampon = vec![0u16; TAILLE_TEXTE];
+        // SAFETY : la fonction écrit au plus `TAILLE_TEXTE` caractères dans notre tampon et rend
+        // le nombre écrit, sans compter le NUL final.
+        let n = if classe {
+            unsafe { GetClassNameW(f, tampon.as_mut_ptr(), TAILLE_TEXTE as i32) }
+        } else {
+            unsafe { GetWindowTextW(f, tampon.as_mut_ptr(), TAILLE_TEXTE as i32) }
+        };
+        if n <= 0 {
+            // Fenêtre sans titre (beaucoup de fenêtres d'outil) : vide, et non une erreur.
+            return String::new();
+        }
+        // `.min` : ne jamais faire confiance à la longueur rendue au point de lire au-delà.
+        let n = (n as usize).min(TAILLE_TEXTE);
+        String::from_utf16_lossy(&tampon[..n])
+    }
 }
 
 // --- raccourci global (KGlobalAccel) ----------------------------------------------------
@@ -306,5 +514,18 @@ mod tests {
         assert_eq!(qt_key("Meta+Truc"), None);
         let j = Fenetre::from_json(r#"{"plein":true,"x":0,"y":0,"w":1920,"h":1080,"classe":"mpv","titre":"film","ecran":"eDP-1"}"#).unwrap();
         assert!(j.plein_ecran && j.rect.2 == 1920.0 && j.ecran == "eDP-1");
+        // Plein écran : la fenêtre couvre le moniteur entier.
+        assert!(couvre_tout((0, 0, 2560, 1440), (0, 0, 2560, 1440)));
+        // Maximisée : la barre des tâches en bas reste libre, donc ce n'est pas du plein écran.
+        assert!(!couvre_tout((0, 0, 2560, 1400), (0, 0, 2560, 1440)));
+        // Fenêtre ordinaire, ni plus large ni plus haute que le moniteur.
+        assert!(!couvre_tout((200, 100, 1200, 900), (0, 0, 2560, 1440)));
+        // Bord à bord avec une barre des tâches sur le côté : toujours pas plein écran.
+        assert!(!couvre_tout((0, 0, 2520, 1440), (0, 0, 2560, 1440)));
+        // Qui déborde de partout (fenêtre plus grande que l'écran) : plein écran.
+        assert!(couvre_tout((-40, -20, 2600, 1500), (0, 0, 2560, 1440)));
+        // Un moniteur qui n'est pas à l'origine : le repère importe, pas les valeurs absolues.
+        assert!(couvre_tout((2560, 0, 5120, 1440), (2560, 0, 5120, 1440)));
+        assert!(!couvre_tout((2560, 0, 5120, 1400), (2560, 0, 5120, 1440)));
     }
 }

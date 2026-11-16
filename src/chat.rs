@@ -1540,7 +1540,7 @@ mod tests {
 // --- panneau de réglages ------------------------------------------------------------------
 
 /// Libellés traduits à l'affichage (`crate::lang::trd`).
-pub const ONGLETS: [&str; 7] = ["Assistant", "Bulles", "Apparence", "Démarrage", "Mails", "Modèles d'IA", "À propos"];
+pub const ONGLETS: [&str; 8] = ["Assistant", "Bulles", "Apparence", "Démarrage", "Mails", "Modèles d'IA", "Intégrations", "À propos"];
 
 /// Champ de saisie du panneau.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1551,11 +1551,15 @@ pub enum Champ {
     Agenda,
     Contacts,
     Cle(&'static str),
+    /// Jeton Notion collé dans l'onglet Intégrations (masqué, comme un mot de passe).
+    Notion,
+    /// Base Notion par défaut (adresse ou identifiant) : ce n'est pas un secret.
+    NotionBase,
 }
 
 impl Champ {
     pub fn secret(&self) -> bool {
-        matches!(self, Champ::MailPasse | Champ::Cle(_))
+        matches!(self, Champ::MailPasse | Champ::Cle(_) | Champ::Notion)
     }
 }
 
@@ -1582,6 +1586,13 @@ pub enum Act {
     /// Ouvre une adresse (mail, WhatsApp, site) sans autre consigne.
     Ouvrir(&'static str),
     RetirerCle(&'static str),
+    /// Vérifie que le jeton Notion rangé répond encore (qui est branché, sur quel espace).
+    TesterNotion,
+    /// Efface le jeton Notion du trousseau.
+    RetirerNotion,
+    /// Bascule `notion` dans le `regles.toml` de l'utilisateur : c'est le code qui applique cet
+    /// interrupteur, donc couper Notion ici coupe vraiment les six outils.
+    BasculeNotion,
     RafraichirCatalogue,
     /// Télécharge le modèle local conseillé (Ollama).
     TelechargerLocal(&'static str),
@@ -1620,6 +1631,10 @@ impl Chat {
         champs.insert(Champ::Prenom, self.cfg.prenom.clone());
         champs.insert(Champ::Agenda, self.cfg.agenda.first().cloned().unwrap_or_default());
         champs.insert(Champ::Contacts, self.cfg.contacts.first().cloned().unwrap_or_default());
+        // La base par défaut n'est pas un secret, elle s'affiche telle qu'enregistrée. Le jeton,
+        // lui, n'est jamais pré-rempli : le champ reste vide et le trousseau n'est pas relu pour
+        // l'afficher — seul son masque apparaît, ailleurs dans l'onglet.
+        champs.insert(Champ::NotionBase, self.cfg.notion_base.clone());
         self.panneau = Some(Panneau { onglet, scroll: 0.0, champs, focus: None, message: None, rx: None, contenu: std::cell::Cell::new(0.0), accueil: None });
         self.open = true;
     }
@@ -1895,6 +1910,29 @@ impl Chat {
                             }
                         });
                     }
+                    Champ::Notion => {
+                        let jeton = v.trim().to_string();
+                        // Vérifié avant d'effacer le champ : un copier-coller raté doit se
+                        // voir tout de suite, et rester collé pour être corrigé.
+                        if !crate::integrations::notion::jeton_plausible(&jeton) {
+                            self.say_panel(false, t!("Ce texte ne ressemble pas à un jeton Notion : il commence par « ntn_ » ou « secret_ »."));
+                            return;
+                        }
+                        if let Some(p) = &mut self.panneau {
+                            p.champs.remove(&Champ::Notion);
+                            p.focus = None;
+                        }
+                        self.panel_background(t!("J'enregistre le jeton dans le trousseau et je teste Notion…"), move || {
+                            if let Err(e) = crate::cles::set_notion(&jeton) {
+                                return (false, e);
+                            }
+                            match crate::integrations::notion::Client::nouveau().and_then(|c| c.moi()) {
+                                Ok(qui) => (true, t!("Notion branché : {}.", qui)),
+                                Err(e) => (false, t!("Jeton enregistré, mais Notion ne répond pas : {}", e)),
+                            }
+                        });
+                    }
+                    Champ::NotionBase => self.apply("notion_base", v.trim()),
                     _ => {}
                 }
             }
@@ -1904,7 +1942,7 @@ impl Chat {
                 if !path.exists() {
                     let _ = crate::paths::write_private(&path, b"");
                 }
-                let _ = crate::hote::commande("xdg-open").arg(&path).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+                let _ = crate::hote::ouvrir(path.as_os_str());
                 self.say_panel(true, t!("{} ouvert dans ton éditeur ; enregistre-le, c'est pris en compte à la question suivante.", f));
             }
             Act::ChoisirModele => {
@@ -1937,7 +1975,7 @@ impl Chat {
             Act::ObtenirCle(id) => {
                 self.retour_attendu = true;
                 if let Some(f) = crate::cles::fournisseur(id) {
-                    let _ = crate::hote::commande("xdg-open").arg(f.key_url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+                    let _ = crate::hote::ouvrir(std::ffi::OsStr::new(f.key_url));
                     if let Some(p) = &mut self.panneau {
                         p.focus = Some(Champ::Cle(id));
                     }
@@ -1946,12 +1984,12 @@ impl Chat {
             }
             Act::OuvrirLien(url) => {
                 self.retour_attendu = true;
-                let _ = crate::hote::commande("xdg-open").arg(url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+                let _ = crate::hote::ouvrir(std::ffi::OsStr::new(url));
                 self.say_panel(true, t!("Page ouverte dans ton navigateur : copie ce qu'il faut, puis colle-le ici (Ctrl+V)."));
             }
             Act::Ouvrir(url) => {
                 self.retour_attendu = true;
-                let _ = crate::hote::commande("xdg-open").arg(url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+                let _ = crate::hote::ouvrir(std::ffi::OsStr::new(url));
                 self.say_panel(true, t!("Ouvert : {}", url));
             }
             Act::RetirerCle(id) => {
@@ -1960,6 +1998,31 @@ impl Chat {
                     let _ = crate::moteur::refresh();
                     (true, t!("Clé retirée du trousseau.").into())
                 });
+            }
+            Act::TesterNotion => {
+                self.panel_background(t!("Je teste la connexion à Notion…"), || {
+                    match crate::integrations::notion::Client::nouveau().and_then(|c| c.moi()) {
+                        Ok(qui) => (true, t!("Notion répond : {}.", qui)),
+                        Err(e) => (false, e),
+                    }
+                });
+            }
+            Act::RetirerNotion => {
+                crate::cles::remove_notion();
+                self.say_panel(true, t!("Jeton Notion effacé du trousseau."));
+            }
+            Act::BasculeNotion => {
+                let actif = !crate::regles::load().notion;
+                match crate::regles::set_notion(actif) {
+                    Ok(()) => {
+                        self.say_panel(true, if actif {
+                            t!("Notion autorisé : les six outils sont proposés au modèle.")
+                        } else {
+                            t!("Notion coupé : plus aucun outil notion_* n'est proposé, ni accepté s'il est demandé.")
+                        });
+                    }
+                    Err(e) => self.say_panel(false, t!("Impossible d'écrire regles.toml : {}", e)),
+                }
             }
             Act::TelechargerLocal(tag) => self.panel_background(t!("Je télécharge le modèle local (plusieurs minutes, tu peux continuer à travailler)…"), move || match crate::local::telecharger(tag) {
                 Ok(m) => (true, m),

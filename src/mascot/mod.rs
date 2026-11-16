@@ -27,7 +27,7 @@ use smithay_client_toolkit::{
     reexports::{
         calloop::{
             EventLoop, LoopHandle,
-            channel::{self, Channel},
+            channel,
             timer::{TimeoutAction, Timer},
         },
         calloop_wayland_source::WaylandSource,
@@ -241,7 +241,7 @@ struct Wl {
     idle: Option<ExtIdleNotificationV1>,
 }
 
-pub fn run(cfg: Config, rx: Channel<Msg>) -> Result<(), String> {
+pub fn run(cfg: Config, rx: crate::os::canal::Recepteur<Msg>) -> Result<(), String> {
     // Affichage : Wayland avec layer-shell (KDE, Sway, Hyprland…), sinon X11 (XFCE, MATE,
     // Cinnamon, i3…). LKATTA_AFFICHAGE=x11 force X11 (essais).
     let x11_possible = std::env::var_os("DISPLAY").is_some();

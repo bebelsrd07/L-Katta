@@ -2230,6 +2230,39 @@ fn onglet(ui: &mut Ui, chat: &crate::chat::Chat, n: usize) {
                 }
             }
         }
+        6 => {
+            // `regles::load()` relit le fichier à chaque dessin, et c'est voulu : un réglage de
+            // sécurité changé à la main doit prendre effet tout de suite. Ce n'est lu que
+            // panneau ouvert sur cet onglet. Le jeton, lui, vient du cache de src/cles.rs — un
+            // dessin ne lance pas un processus `secret-tool`.
+            let regles = crate::regles::load();
+            ui.section(t!("Notion"));
+            if let Some(jeton) = crate::cles::notion() {
+                ui.note(&t!("Jeton rangé dans le trousseau : {}.", crate::cles::masked(&jeton)));
+                ui.buttons(&[(t!("Tester la connexion"), Act::TesterNotion, true), (t!("Effacer le jeton"), Act::RetirerNotion, false)]);
+            } else {
+                ui.note(t!("Pas de jeton : les six outils Notion ne sont pas proposés au modèle."));
+                ui.note(t!("1. Crée une intégration interne, puis partage-lui les pages à lire :"));
+                ui.buttons(&[(t!("Ouvrir mes intégrations Notion"), Act::OuvrirLien("https://www.notion.so/profile/integrations"), false)]);
+                ui.note(t!("2. Colle le jeton secret, qui commence par « ntn_ » :"));
+                ui.field(chat, Champ::Notion, t!("Colle le jeton ici"), Some(t!("Brancher")));
+            }
+            if crate::regles::notion_coupe_par_admin() {
+                // Proposer un interrupteur qui ne peut rien serait pire que de l'expliquer.
+                ui.note(t!("Notion est coupé par l'administrateur de cet ordinateur : ton réglage ne peut pas le lever."));
+            } else {
+                ui.toggle(t!("Lire et écrire dans Notion"), regles.notion, Act::BasculeNotion);
+                ui.note(if regles.notion {
+                    t!("Chaque écriture est montrée et demandée avant d'être envoyée ; ce qui revient est marqué « CONTENU EXTERNE ».")
+                } else {
+                    t!("Coupé : les six outils disparaissent, et sont refusés même demandés en toutes lettres.")
+                });
+            }
+            ui.section(t!("Où ranger une nouvelle page"));
+            ui.note(t!("Base ou page Notion par défaut : sert quand tu ne précises pas où va une capture."));
+            ui.field(chat, Champ::NotionBase, t!("Adresse ou identifiant de la base"), Some(t!("Enregistrer")));
+            ui.note(t!("Le jeton ne quitte pas le trousseau ; cette adresse, elle, est dans config.toml."));
+        }
         _ => {
             use crate::apropos as a;
             ui.section("L Katta (Lemur Kata)");

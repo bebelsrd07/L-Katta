@@ -18,27 +18,60 @@ mod conseils;
 mod daemon;
 mod environnement;
 mod fichiers;
+// La fenêtre « Ouvrir » du bureau passe par le portail freedesktop, donc par D-Bus, qui n'existe
+// pas ailleurs. `fichiers` garde tout ce qui est portable (le repli, la lecture des fichiers
+// choisis, les URI) et n'appelle que cette fonction-ci, qui a son jumeau.
+#[cfg(target_os = "linux")]
+mod portail;
+#[cfg(not(target_os = "linux"))]
+#[path = "portail_ailleurs.rs"]
+mod portail;
 mod film;
 mod fils;
 mod index;
+mod integrations;
 mod inventaire;
 mod flux;
 mod fr;
 mod install;
 mod ipc;
+// Le protocole de commande (les lignes, leur analyse) est dans `ipc`, portable. Le tuyau en
+// dessous ne l'est pas : socket Unix d'un côté, tube nommé de l'autre.
+#[cfg(target_os = "linux")]
+mod transport;
+#[cfg(not(target_os = "linux"))]
+#[path = "transport_win.rs"]
+mod transport;
 mod kde;
 mod mail;
 mod maj;
 mod markdown;
+// Sous Linux, le maki est affiché par Wayland (layer-shell) ou X11. Ailleurs, `mascot_win` prend
+// le relais : une fenêtre Win32 en calques. Le nom du module reste `crate::mascot`, donc rien
+// d'autre ne change — et les quatre sous-modules qui font le maki lui-même (comportement, dessin,
+// espèces, interface, 5 730 lignes) sont les mêmes fichiers des deux côtés.
+#[cfg(target_os = "linux")]
+mod mascot;
+#[cfg(not(target_os = "linux"))]
+#[path = "mascot_win/mod.rs"]
 mod mascot;
 mod afaire;
 mod agenda;
 mod apps;
+// AT-SPI (lire le texte des fenêtres par l'accessibilité du bureau) n'existe que sous Linux.
+// Ailleurs, un module jumeau expose exactement la même API : les appelants — chat, tools,
+// mascot — n'ont pas à savoir sur quel système ils tournent, et un seul des deux fichiers est
+// jamais compilé.
+#[cfg(target_os = "linux")]
+mod atspi;
+#[cfg(not(target_os = "linux"))]
+#[path = "atspi_ailleurs.rs"]
 mod atspi;
 mod memoire;
 mod moteur;
 mod saisie;
 mod sante;
+mod os;
 mod paths;
 mod profile;
 mod regles;
@@ -53,6 +86,12 @@ mod notifs;
 mod terminal;
 mod tools;
 mod toplevels;
+// L'extension GNOME de L Katta parle à GNOME Shell par D-Bus, qui n'existe pas ailleurs.
+// Même principe qu'`atspi` : un jumeau, une seule API, un seul fichier compilé.
+#[cfg(target_os = "linux")]
+mod gnome;
+#[cfg(not(target_os = "linux"))]
+#[path = "gnome_ailleurs.rs"]
 mod gnome;
 mod web;
 
@@ -88,6 +127,7 @@ Utilisation : lkatta [commande]
   demarrage on|off        lancer le maki à l'ouverture de session (ou non)
   maj                     cherche et installe la dernière version
   compte-mail <adresse>   ajoute un compte mail (mot de passe rangé dans le trousseau)
+  notion [jeton]          jeton Notion (rangé dans le trousseau ; « retirer » l'efface)
   catalogue               rafraîchit les modèles gratuits du moteur intégré
   especes                 les lémuriens au choix (lkatta regle espece indri)
   modeles [n] [filtre]    modèles proposés par le moteur n (défaut 1)
@@ -221,6 +261,7 @@ fn main() {
         }
         "maj" => update_now(),
         "compte-mail" => add_mail_account(args.get(1).map(String::as_str).unwrap_or("")),
+        "notion" => notion_setup(args.get(1).map(String::as_str).unwrap_or("")),
         "catalogue" => {
             match moteur::refresh() {
                 Ok(n) => println!("{}", t!("Catalogue rafraîchi : {} modèles.", n)),
@@ -290,6 +331,9 @@ fn main() {
             Some("retirer") | Some("remove") => gnome::retirer().map(|m| println!("{m}")),
             _ => gnome::installer().map(|m| println!("{m}")),
         },
+        // Essai du backend X11 : il n'existe que sous Linux, et sur un autre système la commande
+        // tombe dans le bras par défaut, qui dit qu'elle est inconnue.
+        #[cfg(target_os = "linux")]
         "x11-essai" => {
             let capture = args.iter().position(|a| a == "--capture").and_then(|i| args.get(i + 1)).map(String::as_str);
             let duree = args.iter().position(|a| a == "--duree").and_then(|i| args.get(i + 1)).and_then(|d| d.parse().ok()).unwrap_or(8.0);
@@ -355,6 +399,44 @@ fn add_mail_account(adresse: &str) -> Result<(), String> {
     mail::store_secret(adresse)?;
     match mail::list(c, true, 3) {
         Ok(l) => println!("{}", t!("Connexion réussie : {} mail(s) non lu(s) récent(s).", l.len())),
+        Err(e) => println!("{}", t!("Enregistré, mais la connexion a échoué : {}", e)),
+    }
+    Ok(())
+}
+
+/// `lkatta notion` : le jeton Notion, dans le trousseau comme les clés d'API et les mots de
+/// passe de comptes. Sans argument il est TAPÉ (secret-tool lit le terminal : rien ne
+/// s'affiche, rien ne reste dans l'historique du shell) ; c'est la voie à préférer.
+fn notion_setup(arg: &str) -> Result<(), String> {
+    match arg.trim() {
+        "" => {
+            println!("{}", t!("Notion › Paramètres › Connexions › Développer ou gérer les intégrations › Nouvelle intégration."));
+            println!("{}", t!("Partage avec cette intégration les pages et bases que L Katta doit pouvoir lire."));
+            println!("{}", t!("Tape le jeton Notion (il va dans le trousseau, jamais dans un fichier) :"));
+            cles::set_notion_interactif()?;
+            verifier_notion()
+        }
+        "retirer" | "supprimer" | "effacer" | "remove" => {
+            cles::remove_notion();
+            println!("{}", t!("Jeton Notion retiré du trousseau : les outils notion_* ne sont plus proposés."));
+            Ok(())
+        }
+        "etat" | "test" => verifier_notion(),
+        jeton => {
+            // Collé en argument : accepté (le panneau de réglages passera par là), mais le shell
+            // le garde dans son historique — l'utilisateur doit le savoir.
+            cles::set_notion(jeton)?;
+            println!("{}", t!("Enregistré. Note : passé en argument, ce jeton reste dans l'historique du shell ; « lkatta notion » sans argument ne l'y met pas."));
+            verifier_notion()
+        }
+    }
+}
+
+/// Teste le jeton qui vient d'être rangé : mieux vaut l'apprendre ici que dans la bulle.
+fn verifier_notion() -> Result<(), String> {
+    match integrations::notion::Client::nouveau().and_then(|c| c.moi()) {
+        Ok(qui) => println!("{}", t!("Connexion réussie : {}", qui)),
+        // Le jeton est rangé quand même : un réseau coupé n'est pas une raison de le perdre.
         Err(e) => println!("{}", t!("Enregistré, mais la connexion a échoué : {}", e)),
     }
     Ok(())

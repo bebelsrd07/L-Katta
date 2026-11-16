@@ -66,8 +66,7 @@ pub fn journaliser_etapes(question: &str, reponse: &str, etapes: &[String]) {
     let line = v.to_string();
     let _ = std::fs::create_dir_all(paths::data_dir());
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(journal_file()) {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = f.set_permissions(std::fs::Permissions::from_mode(0o600));
+        let _ = crate::os::restreindre_ouvert(&f);
         let _ = writeln!(f, "{line}");
     }
 }
