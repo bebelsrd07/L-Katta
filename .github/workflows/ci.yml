@@ -114,6 +114,30 @@ jobs:
       # relevé d'erreurs ci-dessous fonctionne pareil.
       - name: Construire pour Windows
         run: cargo build --release --locked --target x86_64-pc-windows-msvc 2>&1 | Tee-Object -FilePath windows-check.log
+      - name: Vérifier le binaire Windows
+        shell: pwsh
+        run: |
+          $exe = 'target/x86_64-pc-windows-msvc/release/lkatta.exe'
+          $bytes = [System.IO.File]::ReadAllBytes($exe)
+          if ($bytes.Length -lt 64 -or $bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) { throw 'Binaire PE invalide' }
+          $offset = [BitConverter]::ToInt32($bytes, 0x3c)
+          if ($offset -lt 0 -or $offset + 4 -gt $bytes.Length -or [BitConverter]::ToUInt32($bytes, $offset) -ne 0x4550) { throw 'Signature PE absente' }
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  lkatta.exe" | Set-Content -Encoding utf8 SHA256-windows.txt
+          Write-Output "SHA-256 : $hash"
+          $proc = Start-Process -FilePath (Resolve-Path $exe) -ArgumentList 'version' -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "lkatta version : code $($proc.ExitCode)" }
+      - name: Tests Windows
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          cargo test --locked --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Publier l'empreinte Windows
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: lkatta-windows-sha256
+          path: SHA256-windows.txt
       # Le même relevé que le commentaire, mais dans la page du run pour qui la regarde.
       - name: Résumé de la compilation
         if: always()
