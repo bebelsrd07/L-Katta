@@ -570,7 +570,6 @@ pub fn execute(name: &str, a: &Value, cfg: &Config, host: &mut dyn Host) -> Stri
 /// Notion ». Ce qui revient est entouré de `[CONTENU EXTERNE]`.
 fn notion_outil(name: &str, a: &Value, host: &mut dyn Host) -> Result<String, String> {
     use crate::integrations::notion as nt;
-    let refus = || Ok("Refusé par l'utilisateur.".into());
     let entier = |k: &str, defaut: u64| a.get(k).and_then(Value::as_u64).unwrap_or(defaut) as usize;
     match name {
         "notion_chercher" => nt::Client::nouveau().and_then(|c| c.chercher(arg(a, "requete"), entier("nombre", 8))).map(external),
@@ -580,7 +579,7 @@ fn notion_outil(name: &str, a: &Value, host: &mut dyn Host) -> Result<String, St
             let (parent, titre, contenu) = (arg(a, "parent"), arg(a, "titre"), arg(a, "contenu"));
             let c = nt::Client::nouveau()?;
             if !host.confirm(&nt::apercu_ecriture(titre, contenu, parent)) {
-                return refus();
+                return Ok("Refusé par l'utilisateur.".into());
             }
             c.creer_page(parent, titre, contenu)
         }
@@ -588,7 +587,7 @@ fn notion_outil(name: &str, a: &Value, host: &mut dyn Host) -> Result<String, St
             let (page, contenu) = (arg(a, "page"), arg(a, "contenu"));
             let c = nt::Client::nouveau()?;
             if !host.confirm(&nt::apercu_ecriture("", contenu, page)) {
-                return refus();
+                return Ok("Refusé par l'utilisateur.".into());
             }
             c.ajouter_blocs(page, contenu, 0)
         }
@@ -600,7 +599,7 @@ fn notion_outil(name: &str, a: &Value, host: &mut dyn Host) -> Result<String, St
             let c = nt::Client::nouveau()?;
             let apercu: String = changements.iter().map(|(k, v)| format!("{k} → {v}")).collect::<Vec<_>>().join("\n");
             if !host.confirm(&t!("Changer ces propriétés dans Notion ({}) ?\n{}", arg(a, "page"), apercu)) {
-                return refus();
+                return Ok("Refusé par l'utilisateur.".into());
             }
             c.modifier_proprietes(arg(a, "page"), &changements)
         }

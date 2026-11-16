@@ -96,17 +96,20 @@ impl Client {
     /// Un appel à l'API. `methode` : GET, POST ou PATCH ; `corps` : JSON envoyé (POST/PATCH).
     fn appel(&self, methode: &str, chemin: &str, corps: Option<Value>) -> Result<Value, String> {
         let url = format!("{API}{chemin}");
-        let req = self
-            .agent
-            .request(methode, &url)
-            .header("Authorization", &format!("Bearer {}", self.jeton))
-            .header("Notion-Version", VERSION)
-            .header("Content-Type", "application/json");
-        // Le jeton n'apparaît jamais dans un message d'erreur : il resterait dans les journaux.
-        let mut r = match corps {
-            Some(c) => req.send_json(&c),
-            None => req.call(),
+        let auth = format!("Bearer {}", self.jeton);
+        // `Agent::get` renvoie un constructeur SANS corps, `post` et `patch` un constructeur
+        // AVEC corps : deux types distincts, donc impossible de préparer la requête une fois
+        // pour toutes puis de choisir la méthode. Chaque branche construit sa réponse, et les
+        // trois aboutissent au même `Result<Response, Error>`.
+        //
+        // Un POST ou un PATCH sans corps retombe sur un GET : aucun appel de ce module ne fait
+        // ça, et mieux vaut une lecture refusée par Notion qu'un envoi à moitié construit.
+        let mut r = match (methode, corps) {
+            ("POST", Some(c)) => self.agent.post(&url).header("Authorization", &auth).header("Notion-Version", VERSION).header("Content-Type", "application/json").send_json(&c),
+            ("PATCH", Some(c)) => self.agent.patch(&url).header("Authorization", &auth).header("Notion-Version", VERSION).header("Content-Type", "application/json").send_json(&c),
+            _ => self.agent.get(&url).header("Authorization", &auth).header("Notion-Version", VERSION).header("Content-Type", "application/json").call(),
         }
+        // Le jeton n'apparaît jamais dans un message d'erreur : il resterait dans les journaux.
         .map_err(|e| erreur_reseau(&e))?;
         let statut = r.status().as_u16();
         let v: Value = r.body_mut().with_config().limit(LIMITE).read_json().unwrap_or_default();
@@ -434,7 +437,9 @@ pub fn texte_riche(v: &Value) -> String {
                 s = habille(&s, "~~", "~~");
             }
             if let Some(href) = t.get("href").and_then(Value::as_str).filter(|h| !h.is_empty()) {
-                s = habille(&s, "[", "]({href})");
+                // Un format! et non un littéral : "]({href})" écrirait le mot « href », pas
+                // l'adresse — le lien affiché pointerait nulle part.
+                s = habille(&s, "[", &format!("]({href})"));
             }
         }
         out.push_str(&s);
@@ -929,13 +934,13 @@ mod tests {
 
     #[test]
     fn filters_and_values_follow_the_real_type() {
-        assert_eq!(filtre_propriete("Nom", "rich_text", "rapport"), json!({"property": "Nom", "rich_text": {"contains": "rapport"}}));
-        assert_eq!(filtre_propriete("Fait", "checkbox", "oui"), json!({"property": "Fait", "checkbox": true}));
-        assert_eq!(filtre_propriete("Fait", "checkbox", "non"), json!({"property": "Fait", "checkbox": false}));
+        assert_eq!(filtre_propriete("Nom", "rich_text", "rapport"), Some(json!({"property": "Nom", "rich_text": {"contains": "rapport"}})));
+        assert_eq!(filtre_propriete("Fait", "checkbox", "oui"), Some(json!({"property": "Fait", "checkbox": true})));
+        assert_eq!(filtre_propriete("Fait", "checkbox", "non"), Some(json!({"property": "Fait", "checkbox": false})));
         // Un nombre qui n'en est pas : pas de filtre inventé.
         assert!(filtre_propriete("Prix", "number", "beaucoup").is_none());
         assert!(filtre_propriete("X", "rollup", "v").is_none());
-        assert_eq!(propriete_notion("multi_select", "a, b"), json!({"multi_select": [{"name": "a"}, {"name": "b"}]}));
+        assert_eq!(propriete_notion("multi_select", "a, b"), Some(json!({"multi_select": [{"name": "a"}, {"name": "b"}]})));
         assert!(propriete_notion("rollup", "v").is_none());
     }
 

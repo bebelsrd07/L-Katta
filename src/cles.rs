@@ -170,7 +170,7 @@ pub fn notion() -> Option<String> {
 pub fn set_notion(jeton: &str) -> Result<(), String> {
     let jeton = jeton.trim();
     if !crate::integrations::notion::jeton_plausible(jeton) {
-        return Err(t!("ce texte ne ressemble pas à un jeton Notion (ntn_… ou secret_…) : vérifie le copier-coller"));
+        return Err(t!("ce texte ne ressemble pas à un jeton Notion (ntn_… ou secret_…) : vérifie le copier-coller").to_string());
     }
     store("L Katta : jeton Notion", &NOTION, jeton)
 }
