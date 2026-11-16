@@ -101,7 +101,7 @@ Le maki, la physique, les 6 espèces, le rendu tiny-skia · `regles.rs` + `auton
 
 | Étape | Livrable | Vérifiable sur Linux ? | État |
 |---|---|---|---|
-| **0 — Socle** | `src/os/`, `Cargo.toml` découpé par cible, canal portable, **job CI `windows-latest`** | ✅ oui | 🟡 **bien avancée** : `src/os/` livré (9 concerns), `Cargo.toml` découpé, AT-SPI et GNOME ont leur jumeau, 67 → 52 erreurs Windows. Reste l'affichage et le canal IPC (§10) |
+| **0 — Socle** | `src/os/`, `Cargo.toml` découpé par cible, canal portable, **job CI `windows-latest`** | ✅ oui | 🟢 **quasi finie** : `src/os/` livré (10 concerns dont le canal), `Cargo.toml` découpé, quatre jumeaux (AT-SPI, GNOME, portail, canal), 67 → 44 erreurs Windows. Reste l'affichage, qui est l'étape 1 (§10) |
 | **1 — MVP Windows** | `mascot/win32.rs`, Named Pipes, Credential Manager, outils de base | ⚠️ compile via CI | ⬜ |
 | **2 — Parité Windows** | discrétion, `controle.rs`, UI Automation, capture écran, Terminal, auto-update `.exe` | ⚠️ compile via CI | ⬜ |
 | **3 — Notion natif** | `src/integrations/notion.rs`, 6 outils IA, accueil matinal, `/notion`, cache FTS5, onglet Intégrations | ✅ **oui, entièrement** | 🟢 **6 outils + CLI + onglet Intégrations livrés, CI verte** ; restent accueil matinal, `/notion`, cache FTS5 |
@@ -185,23 +185,29 @@ testé localement. Chaque chiffre ci-dessous vient d'un rapport de CI, pas d'une
 |---|---|---|
 | `65571f2` | 67 | `Cargo.toml` découpé par cible : les 9 crates Linux sont sous `[target.'cfg(target_os = "linux")'.dependencies]` |
 | `1d9cf54` | 67 | `src/os/` : les droits POSIX, `prctl`, `setsid`, `exec()`, `ioprio` et les chemins en octets passent par le socle (les erreurs « cannot find `unix` in `os` » tombent de 10 à 1) |
-| `f71d76b` | **52** | AT-SPI et GNOME ont leur jumeau hors Linux ; `notify-rust` passe par le socle |
+| `f71d76b` | 52 | AT-SPI et GNOME ont leur jumeau hors Linux ; `notify-rust` passe par le socle |
+| `67c592b` | **44** | Le canal devient portable (`src/os/canal.rs`), le portail de fichiers a son jumeau |
 
-### Ce qui reste (52 erreurs, 6 fichiers)
+### Ce qui reste (44 erreurs, 4 fichiers)
 
 | Fichier | Erreurs | Ce qu'il faut | Étape |
 |---|---|---|---|
-| `mascot/x11.rs` | 24 | Module X11 entier, à ne compiler que sous Linux | 1 |
-| `mascot/mod.rs` | 15 | Le backend Wayland à séparer du dessin, qui lui est portable (`tiny-skia`) | 1 |
-| `fichiers.rs` | 6 | Le portail de fichiers passe par D-Bus : jumeau comme pour `gnome` | 1 |
-| `bureau.rs` | 5 | D-Bus aussi (moniteurs `gdbus`) : jumeau | 1 |
+| `mascot/x11.rs` | 23 | Backend X11 entier : jumeau, puis backend Win32 à la place | 1 |
+| `mascot/mod.rs` | 15 | **Le morceau difficile.** Le champ `App.loop_handle` est un `LoopHandle` calloop et trois `insert_source` en dépendent, dont celui du socket de commande. Il faut séparer l'état portable (le dessin `tiny-skia`, le comportement) de la boucle d'événements | 1 |
+| `bureau.rs` | 5 | D-Bus aussi (script KWin, moniteurs `gdbus`) : jumeau | 1 |
 | `ipc.rs` | 1 | `UnixListener` → tube nommé `\\.\pipe\lkatta-<sid>` | 1 |
-| `daemon.rs` | 1 | `calloop` vient de `smithay-client-toolkit` : canal portable | 1 |
 
-Toutes sont de l'étape 1, et toutes se traitent par le même moyen que celui déjà éprouvé sur
-`atspi` et `gnome` : **un jumeau choisi par `cfg` dans `main.rs`, même nom de module, donc aucun
-site d'appel à modifier.** Le code Linux reste inchangé, ce qui est la raison pour laquelle la CI
-Linux reste verte à chaque envoi.
+Déjà réglés : `fichiers.rs` (le portail a son jumeau) et `daemon.rs` (le canal est portable).
+
+Les jumeaux se traitent par le moyen déjà éprouvé sur `atspi`, `gnome` et `portail` : **choisi par
+`cfg` dans `main.rs`, même nom de module, donc aucun site d'appel à modifier.** Le code Linux reste
+inchangé, ce qui est la raison pour laquelle la CI Linux reste verte à chaque envoi.
+
+`mascot/mod.rs` ne se traite pas ainsi, et c'est pourquoi il est le morceau difficile : il ne s'agit
+pas de doubler un module Linux, mais de couper en deux un module qui mélange l'état de
+l'application et la boucle d'événements d'un seul système. Le dessin est déjà portable — c'est
+`tiny-skia`, qui produit une image en mémoire — donc ce qui doit être séparé est précisément ce qui
+affiche cette image et ce qui attend les événements.
 
 ### Le backend Win32 n'a pas besoin de dépendance nouvelle
 
