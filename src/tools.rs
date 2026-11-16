@@ -86,10 +86,13 @@ fn apercu_mail(c: &crate::mail::Compte, b: &crate::mail::Brouillon, envoi: bool)
     q
 }
 
-/// Schémas OpenAI des outils.
-pub fn schemas() -> Value {
-    let regles = crate::regles::load();
-    let all = json!([
+/// La liste complète des outils, avant tout filtre.
+///
+/// Séparée de `schemas()` pour que la forme des schémas reste vérifiable sur n'importe quelle
+/// machine : sans jeton Notion dans le trousseau, `schemas()` ne propose plus les six outils
+/// Notion, et plus rien ne vérifierait alors leurs noms ni leurs paramètres obligatoires.
+fn tous_les_outils() -> Vec<Value> {
+    json!([
         tool("etat_systeme", "État de la machine : mémoire, disques, charge, processus gourmands, services en échec, mises à jour en attente.", json!({}), &[]),
         tool("chercher_fichiers", "Cherche des fichiers ou dossiers par nom (motif insensible à la casse, * accepté).",
              json!({"motif": s("ex. « facture*2026 » ou « rapport »"), "dossier": s("dossier de départ, défaut ~")}), &["motif"]),
@@ -183,11 +186,17 @@ pub fn schemas() -> Value {
              json!({"page": s("adresse ou identifiant de la page"), "contenu": s("texte en Markdown à ajouter")}), &["page", "contenu"]),
         tool("notion_modifier_proprietes", "Change les propriétés d'une page Notion : statut, case à cocher, date, sélection, texte, nombre. Demande confirmation.",
              json!({"page": s("adresse ou identifiant de la page"), "changements": {"type": "object", "description": "nom de la propriété → nouvelle valeur, ex. {\"Statut\": \"Fait\", \"Priorité\": \"Haute\"}"}}), &["page", "changements"]),
-    ]);
-    let kept: Vec<Value> = all
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
+    ])
+    .as_array()
+    .cloned()
+    .unwrap_or_default()
+}
+
+/// Schémas OpenAI des outils, tels qu'ils sont proposés au modèle : la liste complète, moins
+/// ce que les règles strictes interdisent et ce qui ne peut pas servir sur cette machine.
+pub fn schemas() -> Value {
+    let regles = crate::regles::load();
+    let kept: Vec<Value> = tous_les_outils()
         .into_iter()
         .filter(|t| regles.tool_allowed(t["function"]["name"].as_str().unwrap_or("")).is_ok())
         // Lire et écrire dans le terminal : seulement avec Konsole (son interface D-Bus).
@@ -1174,21 +1183,30 @@ mod tests {
 
     #[test]
     fn schemas_are_valid() {
+        let bruts = tous_les_outils();
         let s = schemas();
         let arr = s.as_array().unwrap();
-        assert!(arr.len() >= 28);
-        for t in arr {
+        assert!(bruts.len() >= 28);
+        for t in &bruts {
             assert_eq!(t["type"], "function");
             assert!(t["function"]["name"].is_string());
         }
+        // `schemas()` ne peut qu'en retirer, jamais en inventer.
+        assert!(arr.len() <= bruts.len());
         // Les six outils Notion ont tous des noms distincts et un schéma d'objet : une faute
-        // de frappe ici se verrait en production, pas à la compilation.
-        let noms: Vec<&str> = arr.iter().filter_map(|t| t["function"]["name"].as_str()).filter(|n| n.starts_with("notion_")).collect();
+        // de frappe ici se verrait en production, pas à la compilation. Vérifié sur la liste
+        // brute, parce que sans jeton sur cette machine `schemas()` ne les contient plus.
+        let noms: Vec<&str> = bruts.iter().filter_map(|t| t["function"]["name"].as_str()).filter(|n| n.starts_with("notion_")).collect();
         assert_eq!(noms.len(), 6, "{noms:?}");
-        for t in arr.iter().filter(|t| t["function"]["name"].as_str().is_some_and(|n| n.starts_with("notion_"))) {
+        assert_eq!(noms.iter().collect::<std::collections::BTreeSet<_>>().len(), 6, "deux outils Notion portent le même nom : {noms:?}");
+        for t in bruts.iter().filter(|t| t["function"]["name"].as_str().is_some_and(|n| n.starts_with("notion_"))) {
             assert_eq!(t["function"]["parameters"]["type"], "object");
             assert!(t["function"]["parameters"]["required"].as_array().is_some_and(|r| !r.is_empty()), "{}", t["function"]["name"]);
         }
+        // Et ce que le modèle voit suit le trousseau : les six outils apparaissent ensemble,
+        // ou pas du tout. Un jeton rangé sur cette machine ne doit pas rendre ce test muet.
+        let visibles = arr.iter().filter(|t| t["function"]["name"].as_str().is_some_and(|n| n.starts_with("notion_"))).count();
+        assert_eq!(visibles, if crate::cles::notion_configure() { 6 } else { 0 }, "les outils Notion ne suivent pas l'état du trousseau");
         // Les trois qui écrivent sont les seuls Notion que `execute` traite comme des effets
         // de bord : c'est cette liste qui évite de leur demander deux fois le même accord.
         for n in ["notion_creer_page", "notion_ajouter_blocs", "notion_modifier_proprietes"] {
