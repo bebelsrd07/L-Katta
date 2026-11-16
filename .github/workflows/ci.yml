@@ -114,20 +114,23 @@ jobs:
       # relevé d'erreurs ci-dessous fonctionne pareil.
       - name: Construire pour Windows
         run: cargo build --release --locked --target x86_64-pc-windows-msvc 2>&1 | Tee-Object -FilePath windows-check.log
-      - name: Résumé (crates en cause)
+      # Le même relevé que le commentaire, mais dans la page du run pour qui la regarde.
+      - name: Résumé de la compilation
         if: always()
         run: |
-          Select-String -Path windows-check.log -Pattern '^error(\[|:)' | Measure-Object | ForEach-Object { "erreurs : $($_.Count)" }
-          Select-String -Path windows-check.log -Pattern 'error(\[E\d+\])?: (could not compile|failed to)' | Select-Object -First 25 | ForEach-Object { $_.Line }
+          Select-String -Path windows-check.log -Pattern '^error' | Measure-Object | ForEach-Object { "erreurs : $($_.Count)" }
+          Select-String -Path windows-check.log -Pattern '^warning' | Measure-Object | ForEach-Object { "avertissements : $($_.Count)" }
+          Select-String -Path windows-check.log -Pattern 'could not compile' | Select-Object -First 5 | ForEach-Object { $_.Line }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: windows-check-log
           path: windows-check.log
           if-no-files-found: ignore
-      # Le livrable. `if-no-files-found: error` exprès : si la compilation a réussi mais que le
-      # binaire n'est pas là, c'est que le chemin a changé, et il vaut mieux un artefact manquant
-      # signalé qu'un artefact vide qui laisse croire que tout va bien.
+      # Le livrable. `warn` et non `error` : si la compilation échoue, le pas « Construire pour
+      # Windows » a déjà échoué bruyamment, et faire échouer aussi celui-ci pour la même cause ne
+      # donnerait qu'une deuxième panne à lire. Si elle réussit, le binaire est là — sinon c'est
+      # que le chemin a changé, et l'avertissement le dit.
       - name: Publier lkatta.exe
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -138,7 +141,7 @@ jobs:
       # Le relevé est publié sur la demande de fusion : l'artefact ci-dessus ne se télécharge
       # que depuis un hôte à part, et c'est lui qui dit quelles crates l'étape 0 devra passer
       # sous `[target.'cfg(target_os = "linux")'.dependencies]`.
-      - name: Publier les crates qui bloquent le portage
+      - name: Publier l'état du portage Windows
         if: always() && github.event_name == 'pull_request'
         shell: bash
         env:
@@ -152,40 +155,59 @@ jobs:
           # Tee-Object écrit en CRLF : sans les \r retirés, plus aucun motif ancré à la fin de
           # ligne ne correspondrait.
           tr -d '\r' < windows-check.log > journal.txt
-          grep -oE 'could not compile `[^`]+`' journal.txt | sort -u > crates.txt
-          # Chaque erreur suivie de l'endroit du code qu'elle désigne. Savoir que `zbus` ne
-          # compile pas ne dit pas quoi fermer : c'est la ligne `--> src/…` qui le dit.
-          awk '/^error|^warning: unused/{e=$0} /^ +--> /{if(e!=""){print e; print "  " $0; e=""}}' journal.txt | head -160 > erreurs.txt
-          # Les erreurs sans localisation (fin de compilation, crate introuvable) comptent aussi.
-          grep -E '^error: aborting|^error\[E0463\]|could not compile' journal.txt | head -10 >> erreurs.txt
-          # Et quels fichiers sont en cause, du plus chargé au moins : c'est la liste de travail
-          # du portage, et elle permet de voir d'une passe si un fichier entier doit être fermé.
-          # cargo écrit les chemins avec le séparateur du système : `src\mascot\x11.rs` ici.
-          # Les deux séparateurs sont acceptés, sinon la liste reste vide sans qu'on sache pourquoi.
-          grep -oE -- '--> src[\\/][A-Za-z0-9_/.\\]+\.rs' journal.txt | sed -e 's/--> //' -e 's|\\|/|g' | cut -d: -f1 | sort | uniq -c | sort -rn | head -25 > fichiers.txt
-          tail -60 journal.txt > fin.txt
+
+          # Les erreurs, chacune suivie de l'endroit du code qu'elles désignent. Sans la ligne
+          # `--> src/…`, on sait que ça casse mais on ne sait pas quoi fermer.
+          awk '/^error/{e=$0} /^ +--> /{if(e!=""){print e; print "  " $0; e=""}}' journal.txt | head -120 > erreurs.txt
+          grep -E '^error: aborting|could not compile' journal.txt | head -10 >> erreurs.txt
+          N_ERREURS=$(grep -cE '^error' journal.txt)
+
+          # Les avertissements disent autre chose, et c'est maintenant l'information la plus
+          # utile : une fonction « never used » sous Windows est une fonctionnalité qui n'y est
+          # pas encore branchée. Cette liste est donc l'état d'avancement réel du portage, et
+          # elle n'a rien à voir avec des erreurs — d'où deux sections séparées.
+          awk '/^warning:/{w=substr($0,10)} /^ +--> /{if(w!=""){sub(/^ +--> /,""); print $0 "  « " w " »"; w=""}}' journal.txt | sed -e 's|\\|/|g' | sort | head -80 > avertissements.txt
+          N_AVERT=$(grep -cE '^warning' journal.txt)
+
+          # Le binaire, s'il est là. Sa taille compte aussi : le budget mémoire est de 15 Mo.
+          EXE=target/x86_64-pc-windows-msvc/release/lkatta.exe
+          if [ -f "$EXE" ]; then
+            LIGNE_EXE="**lkatta.exe** : $(wc -c < "$EXE") octets, publié comme artefact \`lkatta-windows-x64\` du run."
+          else
+            LIGNE_EXE="**lkatta.exe** : absent, la compilation n'est pas allée au bout."
+          fi
           set -e
+
+          # `GITHUB_SHA` d'un événement pull_request est le commit de fusion éphémère que GitHub
+          # fabrique pour essayer la demande : il n'est dans aucun historique local, donc personne
+          # ne peut le retrouver. On cite la tête du PR à la place.
+          TETE='${{ github.event.pull_request.head.sha }}'
+          TETE="${TETE:-$GITHUB_SHA}"
           {
-            # Même raison que pour le job `tests` : citer la tête du PR, pas le commit de
-            # fusion éphémère.
-            TETE='${{ github.event.pull_request.head.sha }}'
-            TETE="${TETE:-$GITHUB_SHA}"
-            echo "### Portage Windows : ce qui bloque (${TETE::7})"
+            echo "### Portage Windows (${TETE::7})"
             echo
-            echo " cargo check --target x86_64-pc-windows-msvc, relevé automatique (job non bloquant)."
+            echo "\`cargo build --release --target x86_64-pc-windows-msvc\` : ${N_ERREURS} erreur(s), ${N_AVERT} avertissement(s)."
             echo
-            echo "**$(wc -l < crates.txt) crate(s) ne compilent pas encore pour Windows :**"
+            echo "$LIGNE_EXE"
             echo
-            sed 's/could not compile/- /' crates.txt
-            echo
-            echo "**Fichiers en cause (nombre d'erreurs, du plus chargé au moins) :**"
-            echo
-            test -s fichiers.txt && cat fichiers.txt || echo "  (aucune localisation dans le journal)"
+            if [ "$N_ERREURS" -gt 0 ]; then
+              echo "**Ce qui empêche de compiler :**"
+              echo
+              echo '```'
+              cat erreurs.txt
+              echo '```'
+              echo
+            fi
+            echo "**Ce qui n'est pas encore câblé sous Windows** — code compilé mais jamais appelé sur cette cible :"
             echo
             echo '```'
-            cat erreurs.txt
-            echo "----- fin du journal -----"
-            cat fin.txt
+            if [ -s avertissements.txt ]; then cat avertissements.txt; else echo "  (rien : tout ce qui compile est utilisé)"; fi
+            echo '```'
+            echo
+            echo "**Fin du journal :**"
+            echo
+            echo '```'
+            tail -25 journal.txt
             echo '```'
           } > windows.md
           # Un commentaire GitHub tient dans 65 536 caractères.

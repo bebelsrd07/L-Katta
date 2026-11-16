@@ -144,11 +144,19 @@ struct MSG {
     lprivate: u32,
 }
 
+/// `WNDPROC` : la signature exacte que Windows attend du rappel de fenêtre.
+///
+/// La déclarer comme un type de fonction plutôt que comme un entier a deux effets. Le compilateur
+/// vérifie que `procedure` a bien les quatre paramètres et le bon retour — avec un `usize` une
+/// signature fausse ne se verrait qu'à l'appel, sous forme de pile corrompue. Et cela évite le
+/// cast direct d'une fonction en entier, que rustc signale à juste titre.
+type ProcedureFenetre = unsafe extern "system" fn(fenetre: isize, message: u32, w: usize, l: isize) -> isize;
+
 #[repr(C)]
 struct WNDCLASSEXW {
     cbsize: u32,
     style: u32,
-    wndproc: usize,
+    wndproc: ProcedureFenetre,
     cbclsextra: i32,
     cbwndextra: i32,
     hinstance: isize,
@@ -296,7 +304,7 @@ pub fn run(cfg: Config, rx: crate::os::canal::Recepteur<Msg>) -> Result<(), Stri
     let classe = WNDCLASSEXW {
         cbsize: std::mem::size_of::<WNDCLASSEXW>() as u32,
         style: 0,
-        wndproc: procedure as usize,
+        wndproc: procedure,
         cbclsextra: 0,
         cbwndextra: 0,
         hinstance: instance,

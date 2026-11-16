@@ -101,21 +101,26 @@ Le maki, la physique, les 6 espèces, le rendu tiny-skia · `regles.rs` + `auton
 
 | Étape | Livrable | Vérifiable sur Linux ? | État |
 |---|---|---|---|
-| **0 — Socle** | `src/os/`, `Cargo.toml` découpé par cible, canal portable, **job CI `windows-latest`** | ✅ oui | 🟢 **quasi finie** : `src/os/` livré (10 concerns dont le canal), `Cargo.toml` découpé, quatre jumeaux (AT-SPI, GNOME, portail, canal), 67 → 44 erreurs Windows. Reste l'affichage, qui est l'étape 1 (§10) |
-| **1 — MVP Windows** | `mascot/win32.rs`, Named Pipes, Credential Manager, outils de base | ⚠️ compile via CI | ⬜ |
+| **0 — Socle** | `src/os/`, `Cargo.toml` découpé par cible, canal portable, **job CI `windows-latest`** | ✅ oui | 🟢 **finie** : `src/os/` livré (10 concerns dont le canal), `Cargo.toml` découpé, six jumeaux (AT-SPI, GNOME, portail, canal, transport, mascotte). **67 → 44 → 7 → 0 erreur Windows**, et le job `windows` passe en `success` |
+| **1 — MVP Windows** | `mascot/win32.rs`, Named Pipes, Credential Manager, outils de base | ⚠️ compile via CI | 🟡 **entamée, mesurée** : `lkatta.exe` compile en release (**5 146 805 octets**) et est publié comme artefact ; le maki s'affiche par `UpdateLayeredWindow`, les commandes passent par un tube nommé vérifié dans les deux sens. Restent la bulle de discussion, le suivi de la fenêtre active, le multi-écrans, Credential Manager et `RegisterHotKey` (§10) |
 | **2 — Parité Windows** | discrétion, `controle.rs`, UI Automation, capture écran, Terminal, auto-update `.exe` | ⚠️ compile via CI | ⬜ |
 | **3 — Notion natif** | `src/integrations/notion.rs`, 6 outils IA, accueil matinal, `/notion`, cache FTS5, onglet Intégrations | ✅ **oui, entièrement** | 🟢 **6 outils + CLI + onglet Intégrations livrés, CI verte** ; restent accueil matinal, `/notion`, cache FTS5 |
 | **4 — Écosystème** | `lkatta-hook` + pont agents, client MCP, webhooks n8n/Make | ✅ oui (sauf le tuyau Windows) | ⬜ |
 
-### 👉 Ma recommandation : **commencer par l'étape 3 (Notion), pas par l'étape 0**
+### L'ordre suivi, et pourquoi
 
-Trois raisons simples :
+L'étape 3 (Notion) est passée en premier, avant le socle Windows. Trois raisons, qui se sont
+vérifiées :
 
-- C'est du **Rust pur qui compile et se teste sur Linux aujourd'hui** → tu vois un résultat vrai dès le premier patch.
-- Ça crée le squelette `src/integrations/` que le MCP et les webhooks réutiliseront.
-- L'étape 0 touche `Cargo.toml` partout : sans compilateur Windows sous la main à chaque patch, c'est là qu'on casse les choses en silence.
+- C'était du **Rust pur, compilé et testé sur Linux** → un résultat vrai dès le premier patch,
+  plutôt qu'un portage dont on ne peut rien montrer.
+- Ça a créé le squelette `src/integrations/` que le MCP et les webhooks réutiliseront.
+- L'étape 0 touche `Cargo.toml` partout : sans compilateur Windows sous la main à chaque patch,
+  c'est là qu'on casse les choses en silence.
 
-Et **le tout premier commit, quel que soit l'ordre choisi, devrait être le job CI `windows-latest`** : il ne coûte rien et c'est lui qui rend le portage vérifiable (voir §7).
+Et le tout premier commit a été le job CI `windows-latest`, comme prévu : il ne coûte rien et c'est
+lui qui a rendu le portage vérifiable (voir §7). Sans lui, aucun des chiffres du §10 n'existerait —
+ils viennent tous d'un run, jamais d'une estimation.
 
 ---
 
@@ -130,15 +135,39 @@ Et **le tout premier commit, quel que soit l'ordre choisi, devrait être le job 
 
 Ainsi chaque patch est **réellement compilé et testé**, pas seulement écrit.
 
-*Variante si tu préfères :* je te donne les commandes, tu les lances chez toi et tu me colles la sortie.
+Le job `windows` construit maintenant en release et publie `lkatta.exe`, donc le livrable sort de
+la CI directement — il n'y a plus à le compiler ailleurs pour l'obtenir.
+
+Une limite à connaître, parce qu'elle a coûté : **le journal et les artefacts d'un run ne se
+téléchargent que depuis des hôtes à part**, hors de la liste autorisée ici. La seule information
+qui remonte est donc ce qu'un pas de la CI écrit lui-même sur la demande de fusion. D'où le
+commentaire automatique du job `windows`, qui est l'unique instrument de mesure du portage — et
+dont le format a été écrit pour dire deux choses séparées : ce qui empêche de compiler, et ce qui
+compile mais n'est pas encore branché.
 
 ---
 
-## 8. Ce que je te demande avant d'écrire le premier patch
+## 8. Ce qui a été décidé
 
-1. Par quelle étape on démarre — **3 (Notion)** comme je le recommande, **0 (socle Windows)**, ou **4 (pont agents façon coucou)** ?
-2. Quels connecteurs prioritaires en plus de Notion ?
-3. CI comme compilateur, ou tu compiles chez toi ?
+Ces questions se posaient avant le premier patch. Elles sont tranchées, et le code en porte la
+trace — elles ne sont conservées ici que comme explication des choix, pas comme demandes.
+
+1. **Ordre des étapes : 3 (Notion) puis 0 (socle) puis 1 (MVP Windows).** Notion d'abord parce
+   que c'était le seul morceau qui ne dépendait pas du portage, et qu'il a donné une CI verte
+   complète avant de toucher aux parties sensibles.
+2. **Connecteurs : Notion seul pour l'instant.** Les autres attendent que le portage soit fini —
+   ajouter une surface réseau avant que le binaire tourne n'aurait fait que multiplier ce qu'il
+   faut vérifier d'un coup.
+3. **La CI comme compilateur**, faute de toolchain ici.
+4. **100 % natif Windows, sans WebView2 ni Tauri.** C'est la contrainte la plus structurante :
+   elle a écarté la piste coucou-bottom comme base, et elle impose d'écrire soi-même les
+   déclarations Win32 (§10).
+5. **`Cargo.lock` inchangé.** Aucune dépendance nouvelle nulle part ; les bibliothèques du système
+   (`kernel32`, `user32`, `gdi32`, `advapi32`) sont liées par `#[link]`, et les fonctions sont
+   déclarées à la main.
+6. **Le code Linux reste identique au octet près quand un jumeau est utilisé.** Les jumeaux
+   ajoutent un fichier choisi par `cfg`, ils ne modifient pas l'existant — c'est ce qui permet à la
+   CI Linux de rester verte à chaque envoi, et de vérifier cette affirmation par `git diff`.
 
 ---
 
@@ -186,28 +215,58 @@ testé localement. Chaque chiffre ci-dessous vient d'un rapport de CI, pas d'une
 | `65571f2` | 67 | `Cargo.toml` découpé par cible : les 9 crates Linux sont sous `[target.'cfg(target_os = "linux")'.dependencies]` |
 | `1d9cf54` | 67 | `src/os/` : les droits POSIX, `prctl`, `setsid`, `exec()`, `ioprio` et les chemins en octets passent par le socle (les erreurs « cannot find `unix` in `os` » tombent de 10 à 1) |
 | `f71d76b` | 52 | AT-SPI et GNOME ont leur jumeau hors Linux ; `notify-rust` passe par le socle |
-| `67c592b` | **44** | Le canal devient portable (`src/os/canal.rs`), le portail de fichiers a son jumeau |
+| `67c592b` | 44 | Le canal devient portable (`src/os/canal.rs`), le portail de fichiers a son jumeau |
+| `05236c8` | 7 | La mascotte a son jumeau Win32 (`src/mascot_win/`), le transport de commandes est séparé du protocole, le service D-Bus de `bureau.rs` passe sous `cfg` |
+| `a5ad705` | **0** | Le reste venait de mon propre code Win32 : des poignées `isize` sans `is_null()`, un double emprunt, et `futures-lite` devenu Linux seul. **`cargo build --release` passe, `lkatta.exe` est produit** |
 
-### Ce qui reste (44 erreurs, 4 fichiers)
+**Le portage compile.** `a5ad705` est le premier envoi où le job `windows` finit en `success` :
+`cargo build --release --locked --target x86_64-pc-windows-msvc` aboutit, et `lkatta.exe`
+(5 146 805 octets) est publié comme artefact `lkatta-windows-x64` du run. La CI Linux reste verte
+à chaque envoi, et `mascot/mod.rs`, `mascot/x11.rs` et `Cargo.lock` n'ont pas été modifiés d'un
+octet : les jumeaux ajoutent, ils ne remplacent pas.
 
-| Fichier | Erreurs | Ce qu'il faut | Étape |
-|---|---|---|---|
-| `mascot/x11.rs` | 23 | Backend X11 entier : jumeau, puis backend Win32 à la place | 1 |
-| `mascot/mod.rs` | 15 | **Le morceau difficile.** Le champ `App.loop_handle` est un `LoopHandle` calloop et trois `insert_source` en dépendent, dont celui du socket de commande. Il faut séparer l'état portable (le dessin `tiny-skia`, le comportement) de la boucle d'événements | 1 |
-| `bureau.rs` | 5 | D-Bus aussi (script KWin, moniteurs `gdbus`) : jumeau | 1 |
-| `ipc.rs` | 1 | `UnixListener` → tube nommé `\\.\pipe\lkatta-<sid>` | 1 |
+### Ce qui reste : 31 avertissements, et ce qu'ils veulent dire
 
-Déjà réglés : `fichiers.rs` (le portail a son jumeau) et `daemon.rs` (le canal est portable).
+Plus aucune erreur. Le rapport de CI liste maintenant les avertissements `dead_code`, qui sont
+l'information la plus utile qu'il donne : **une fonction « never used » sous Windows est une
+fonctionnalité qui n'y est pas encore branchée.** Le relevé de `a5ad705` en compte 31 sur 14
+fichiers, dont 7 identifiés dans le journal tronqué :
+
+| Fonction jamais appelée sous Windows | Ce que ça veut dire | Étape |
+|---|---|---|
+| `toplevels::{etats, mettre_a_jour, prendre_actions, marquer_disponible}` | Le suivi des fenêtres n'est pas branché : `Ctx.avoid` et `Ctx.toit` restent vides, donc le maki ne monte pas sur les fenêtres et ne les évite pas | 2 |
+| `notifs::compte` | Le compteur de notifications n'a pas encore de source sous Windows | 2 |
+| `os::osstring_depuis_octets` | Le socle a la fonction, personne ne l'appelle encore sur cette cible | 2 |
+| `saisie`, `chat` (4 avertissements chacun) | La bulle de discussion : `draw::chat_bubble` est portable et prêt, mais le clavier et l'enchaînement vers `brain` ne sont pas câblés | 1 |
+| `win32.rs` : cast d'une fonction en entier | Corrigé dans l'envoi suivant : le rappel de fenêtre est maintenant un type `WNDPROC` déclaré, que le compilateur vérifie | — |
+
+Le rapport n'affichait que la fin du journal, donc 7 des 31 sont identifiés ; le format publié
+depuis en liste jusqu'à 80, triés par fichier avec leur message, donc le prochain run donnera la
+liste complète. C'est elle qui tient lieu de liste de choses à faire pour l'étape 2.
 
 Les jumeaux se traitent par le moyen déjà éprouvé sur `atspi`, `gnome` et `portail` : **choisi par
 `cfg` dans `main.rs`, même nom de module, donc aucun site d'appel à modifier.** Le code Linux reste
 inchangé, ce qui est la raison pour laquelle la CI Linux reste verte à chaque envoi.
 
-`mascot/mod.rs` ne se traite pas ainsi, et c'est pourquoi il est le morceau difficile : il ne s'agit
-pas de doubler un module Linux, mais de couper en deux un module qui mélange l'état de
-l'application et la boucle d'événements d'un seul système. Le dessin est déjà portable — c'est
-`tiny-skia`, qui produit une image en mémoire — donc ce qui doit être séparé est précisément ce qui
-affiche cette image et ce qui attend les événements.
+`mascot/mod.rs` ne se traitait pas ainsi, et c'était le morceau annoncé comme difficile : il ne
+s'agissait pas de doubler un module Linux, mais de couper en deux un module qui mélange l'état de
+l'application et la boucle d'événements d'un seul système. **C'est fait, et la difficulté annoncée
+était surestimée.** La mesure l'a tranchée avant d'écrire quoi que ce soit : `behavior.rs`,
+`draw.rs`, `dessin.rs` et `especes.rs` — 5 730 des 8 896 lignes — ne contiennent aucune référence
+à Wayland, X11, D-Bus ou `std::os::unix`. Ce qui était propre à Linux était donc la surcouche, pas
+le personnage.
+
+Le jumeau `src/mascot_win/mod.rs` fait 63 lignes : il redéclare les quatre sous-modules avec un
+`#[path]` vers les fichiers existants (leurs `super::behavior` continuent de résoudre, puisque
+leurs frères sont déclarés là aussi), puis il expose `run` avec la même signature. Rien n'est
+dupliqué, et si le comportement du maki change, les deux cibles changent ensemble.
+
+Ce qui est écrit pour de bon, c'est `src/mascot_win/win32.rs` (851 lignes) : une fenêtre en
+calques `WS_EX_LAYERED` avec `UpdateLayeredWindow`, qui donne la zone cliquable gratuitement —
+Windows laisse passer la souris là où l'alpha est nul, donc aucun `WM_NCHITTEST` ni région à
+recalculer à chaque image. Elle est aussi `NOACTIVATE` : prendre le clavier de l'utilisateur pour
+un lémurien serait une faute. Le rendu suit l'enchaînement exact de la version Linux, mêmes
+constantes (470×560 pixels logiques, même calcul d'échelle, même rectangle selon la pose).
 
 ### Le backend Win32 n'a pas besoin de dépendance nouvelle
 
@@ -222,10 +281,13 @@ mêmes blocs soi-même, sans aucune crate :
 
 ```rust
 #[link(name = "user32")]
-extern "system" {
+unsafe extern "system" {
     fn RegisterHotKey(fenetre: isize, id: i32, modificateurs: u32, touche: u32) -> i32;
 }
 ```
+
+Le mot `unsafe` devant `extern` n'est pas décoratif : ce crate est en édition 2024, qui l'exige
+(`glibc.rs` écrit de même `#[unsafe(no_mangle)]`). Sans lui, la compilation échoue.
 
 `kernel32`, `user32` et `advapi32` sont des bibliothèques du système, présentes sur toute
 installation de Windows : l'attribut `#[link]` dit à l'éditeur de liens de les prendre, et il n'y
@@ -243,10 +305,18 @@ Ce que ça coûte en échange, et il faut le savoir avant de choisir :
 
 Pour quelques dizaines de fonctions, c'est un coût acceptable et c'est ce que fait ce projet
 partout ailleurs : `libc::prctl` et `libc::setsid` sont déjà des appels directs, et le socle
-`src/os/` les a rangés derrière des fonctions sûres. Les déclarations Win32 iront au même
-endroit, avec les mêmes règles — une fonction sûre par besoin, le `unsafe` confiné dedans, et un
-`SAFETY:` qui dit pourquoi c'est juste.
+`src/os/` les a rangés derrière des fonctions sûres. Les déclarations Win32 sont allées au même
+endroit, avec les mêmes règles : `src/transport_win.rs` pour `kernel32` et `advapi32`,
+`src/mascot_win/win32.rs` pour `user32` et `gdi32`. Une fonction sûre par besoin, le `unsafe`
+confiné dedans, et un `SAFETY:` qui dit pourquoi c'est juste.
 
-Si tu préfères la crate malgré tout, la marche à suivre est courte : lancer
-`cargo add windows-sys --features Win32_Foundation,Win32_UI_WindowsAndMessaging,…` une fois en
-local et m'envoyer le `Cargo.lock` résultant. Je ne peux pas le faire d'ici.
+**C'est maintenant vérifié par la CI, plus seulement plausible** : `a5ad705` compile en release
+sans aucune dépendance nouvelle, `Cargo.lock` octet pour octet identique. Le pari est tenu.
+
+Ce que la compilation ne vérifie toujours pas, et qui reste la vraie règle de prudence : une
+signature fausse ne se voit qu'à l'exécution, parce que `cargo check` contrôle les types Rust et
+non l'ABI. Deux exemples vécus dans ce portage, tous deux invisibles pour le compilateur :
+l'ordre réel de `OpenProcess` est (accès, hérite, pid) — un PID passé comme masque d'accès n'aurait
+rien planté, il aurait seulement fait échouer chaque vérification d'identité en silence ; et la
+hauteur de l'en-tête DIB doit être négative pour que l'image soit dans le sens d'un écran, sinon le
+maki apparaît la tête en bas. Ces deux-là se relisent, elles ne se compilent pas.
