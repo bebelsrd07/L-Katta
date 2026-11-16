@@ -43,6 +43,7 @@ use super::behavior::{Ctx, Exits, Maki, PoseKind};
 use super::draw::{self, Text};
 use super::especes::Espece;
 use crate::config::Config;
+use crate::conseils::Kind;
 use crate::ipc::Msg;
 
 #[link(name = "user32")]
@@ -284,6 +285,9 @@ pub fn run(cfg: Config, rx: crate::os::canal::Recepteur<Msg>) -> Result<(), Stri
         travail,
         origin: (0.0, 0.0),
         fenetre: 0,
+        devant: None,
+        ne_pas_deranger: false,
+        micro: false,
         pointeur: None,
         survole: false,
         entraine: false,
@@ -478,6 +482,17 @@ struct Etat {
     /// Coin haut-gauche de la fenêtre dans le monde.
     origin: (f32, f32),
     fenetre: isize,
+    /// La fenêtre qui est devant, telle que `bureau::demarrer` la sonde. `None` jusqu'à la
+    /// première réponse du système : jusque-là le maki n'évite rien et ne monte sur rien, plutôt
+    /// que d'éviter une fenêtre inventée.
+    devant: Option<crate::bureau::Fenetre>,
+    /// « Ne pas déranger » et micro occupé, poussés par `bureau::veiller`. Les deux sondes
+    /// passent par `gdbus` et `pactl`, qui n'existent pas ici : elles rendent toujours faux sous
+    /// Windows, donc ces deux booléens n'y changent jamais. Les traiter quand même coûte deux
+    /// lignes et garde la même règle des deux côtés — le jour où une sonde native existe, rien
+    /// d'autre ne bouge.
+    ne_pas_deranger: bool,
+    micro: bool,
     pointeur: Option<(f32, f32)>,
     survole: bool,
     entraine: bool,
@@ -543,11 +558,16 @@ impl Etat {
                 // boucle de messages.
                 unsafe { DestroyWindow(self.fenetre) };
             }
+            Msg::Fenetre(f) => self.sur_fenetre(f),
+            Msg::Occupe { ne_pas_deranger, micro } => {
+                self.ne_pas_deranger = ne_pas_deranger;
+                self.micro = micro;
+            }
             // Non câblés ici, et c'est écrit plutôt que laissé au hasard :
             // `Chat` et `Raccourci` ouvrent la bulle de discussion, qui demande le clavier ;
-            // `Fenetre`, `Occupe`, `ActiveOutput`, `Screen` et `Desktop` viennent du suivi du
-            // bureau, absent sous Windows pour l'instant ; `Capture` sert aux essais X11.
-            Msg::Chat | Msg::Raccourci | Msg::Fenetre(_) | Msg::Occupe { .. } | Msg::ActiveOutput(_) | Msg::Screen | Msg::Desktop(_) | Msg::Capture(_) => {}
+            // `ActiveOutput`, `Screen` et `Desktop` viennent du passage d'un écran ou d'un bureau
+            // à l'autre, et un seul moniteur est pris en compte ; `Capture` sert aux essais X11.
+            Msg::Chat | Msg::Raccourci | Msg::ActiveOutput(_) | Msg::Screen | Msg::Desktop(_) | Msg::Capture(_) => {}
         }
     }
 
@@ -563,7 +583,7 @@ impl Etat {
             h: self.monde.1,
             night: nuit,
             day: (6..18).contains(&heure),
-            quiet: self.quiet,
+            quiet: self.quiet || self.occupe(),
             acrobatics: self.cfg.maki.acrobaties,
             show_gap_min: self.cfg.maki.numeros_min.max(1) as f32,
             hovered: self.survole,
@@ -575,11 +595,75 @@ impl Etat {
             band: if self.cfg.maki.zone == "libre" { 0.0 } else { 0.17 },
             // Un seul moniteur pris en compte : aucune sortie voisine, donc il ne traverse pas.
             exits: Exits { left: false, right: false, up: false, down: false },
-            // Le suivi de la fenêtre active n'est pas câblé sous Windows (`bureau::demarrer` n'y
-            // fait rien) : rien à éviter, rien où monter. Le dire ici plutôt que de laisser croire
-            // que le maki a choisi de rester au sol.
-            avoid: None,
-            toit: None,
+            avoid: self.a_eviter(),
+            toit: if self.cfg.maki.acrobaties { self.toit() } else { None },
+        }
+    }
+
+    /// Visioconférence, présentation ou plein écran : il se fait oublier.
+    ///
+    /// Sous Linux la règle ajoute « Ne pas déranger » et le micro occupé ; les deux booléens sont
+    /// là mais leurs sondes (`gdbus`, `pactl`) n'existent pas sous Windows et rendent toujours
+    /// faux. Ce qui fonctionne ici, et c'est l'essentiel de la règle, est la détection par le nom
+    /// de la fenêtre : Zoom, Teams, Meet, Jitsi, Skype, Webex, Discord, OBS, Impress.
+    fn occupe(&self) -> bool {
+        self.ne_pas_deranger || self.micro || self.devant.as_ref().is_some_and(|f| f.plein_ecran || f.visio())
+    }
+
+    /// Zone horizontale de la fenêtre de devant à éviter, sauf si elle prend presque toute la
+    /// largeur : il n'y aurait alors nulle part où aller, et mieux vaut ignorer.
+    ///
+    /// Mêmes seuils que la version Linux, dans le monde du maki — la zone de travail, origine en
+    /// haut à gauche, en pixels physiques.
+    fn a_eviter(&self) -> Option<(f32, f32)> {
+        let f = self.devant.as_ref()?;
+        let w = self.monde.0;
+        (f.rect.2 > 0.0 && f.rect.2 < w * 0.8).then_some((f.rect.0.max(0.0), (f.rect.0 + f.rect.2).min(w)))
+    }
+
+    /// Haut de la fenêtre de devant, s'il y a la place au-dessus pour lui : pas en plein écran,
+    /// pas collée en haut, assez large. Mêmes seuils que la version Linux.
+    fn toit(&self) -> Option<(f32, f32, f32)> {
+        let f = self.devant.as_ref()?;
+        if f.plein_ecran || f.rect.2 <= 0.0 {
+            return None;
+        }
+        let (w, h) = self.monde;
+        let s = self.s;
+        let x0 = f.rect.0.max(0.0);
+        let x1 = (f.rect.0 + f.rect.2).min(w);
+        let y = f.rect.1;
+        (x1 - x0 >= 260.0 * s && y >= 170.0 * s && y <= h - 120.0 * s).then_some((x0, x1, y))
+    }
+
+    /// Une fenêtre passe devant, ou celle qui y était bouge.
+    ///
+    /// Reprend la règle de la version Linux : la bulle se ferme si elle a assez vécu, et le maki
+    /// descend d'un toit qui n'est plus le sien — mais il suit une même fenêtre qui se déplace.
+    fn sur_fenetre(&mut self, mut f: crate::bureau::Fenetre) {
+        // Du repère de l'écran (origine au coin de l'écran virtuel) vers le monde du maki (origine
+        // au coin de la zone de travail). Les deux sont en pixels physiques, donc aucune échelle à
+        // appliquer : c'est la raison pour laquelle le monde est mesuré ainsi.
+        f.rect = (f.rect.0 - self.travail.left as f32, f.rect.1 - self.travail.top as f32, f.rect.2, f.rect.3);
+        let autre = self.devant.as_ref().is_none_or(|g| g.classe != f.classe || g.titre != f.titre || g.rect != f.rect);
+        if autre {
+            self.fermer_bulle_auto();
+        }
+        if self.devant.as_ref().is_none_or(|g| g.classe != f.classe || g.titre != f.titre) {
+            self.maki.quitter_toit();
+        }
+        crate::atspi::noter_fenetre(&f.titre, &f.classe);
+        self.devant = Some(f);
+    }
+
+    /// Ferme la bulle si elle a assez vécu : un rappel ou une alerte reste plus longtemps qu'une
+    /// simple remarque. Mêmes seuils que la version Linux, pour que la même chose disparaisse au
+    /// même moment des deux côtés.
+    fn fermer_bulle_auto(&mut self) {
+        let Some(b) = &self.maki.bubble else { return };
+        let min = if matches!(b.msg.kind, Kind::Reminder | Kind::Alert) { 3.0 } else { 1.0 };
+        if b.age >= min {
+            self.maki.bubble = None;
         }
     }
 

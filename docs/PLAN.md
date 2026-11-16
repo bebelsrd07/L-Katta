@@ -103,7 +103,7 @@ Le maki, la physique, les 6 espèces, le rendu tiny-skia · `regles.rs` + `auton
 |---|---|---|---|
 | **0 — Socle** | `src/os/`, `Cargo.toml` découpé par cible, canal portable, **job CI `windows-latest`** | ✅ oui | 🟢 **finie** : `src/os/` livré (10 concerns dont le canal), `Cargo.toml` découpé, six jumeaux (AT-SPI, GNOME, portail, canal, transport, mascotte). **67 → 44 → 7 → 0 erreur Windows**, et le job `windows` passe en `success` |
 | **1 — MVP Windows** | `mascot/win32.rs`, Named Pipes, Credential Manager, outils de base | ⚠️ compile via CI | 🟡 **entamée, mesurée** : `lkatta.exe` compile en release (**5 146 805 octets**) et est publié comme artefact ; le maki s'affiche par `UpdateLayeredWindow`, les commandes passent par un tube nommé vérifié dans les deux sens. Restent la bulle de discussion, le suivi de la fenêtre active, le multi-écrans, Credential Manager et `RegisterHotKey` (§10) |
-| **2 — Parité Windows** | discrétion, `controle.rs`, UI Automation, capture écran, Terminal, auto-update `.exe` | ⚠️ compile via CI | ⬜ |
+| **2 — Parité Windows** | discrétion, `controle.rs`, UI Automation, capture écran, Terminal, auto-update `.exe` | ⚠️ compile via CI | 🟡 **commencée** : la discrétion marche par la fenêtre active (visio, présentation, plein écran) et le maki monte sur les fenêtres. Restent « Ne pas déranger », le micro, UI Automation, la capture et l'auto-update |
 | **3 — Notion natif** | `src/integrations/notion.rs`, 6 outils IA, accueil matinal, `/notion`, cache FTS5, onglet Intégrations | ✅ **oui, entièrement** | 🟢 **6 outils + CLI + onglet Intégrations livrés, CI verte** ; restent accueil matinal, `/notion`, cache FTS5 |
 | **4 — Écosystème** | `lkatta-hook` + pont agents, client MCP, webhooks n8n/Make | ✅ oui (sauf le tuyau Windows) | ⬜ |
 
@@ -218,6 +218,7 @@ testé localement. Chaque chiffre ci-dessous vient d'un rapport de CI, pas d'une
 | `67c592b` | 44 | Le canal devient portable (`src/os/canal.rs`), le portail de fichiers a son jumeau |
 | `05236c8` | 7 | La mascotte a son jumeau Win32 (`src/mascot_win/`), le transport de commandes est séparé du protocole, le service D-Bus de `bureau.rs` passe sous `cfg` |
 | `a5ad705` | **0** | Le reste venait de mon propre code Win32 : des poignées `isize` sans `is_null()`, un double emprunt, et `futures-lite` devenu Linux seul. **`cargo build --release` passe, `lkatta.exe` est produit** |
+| `65e0f5a` | 0 (46 avertissements) | Le presse-papiers et la fenêtre « Ouvrir » parlent à Windows (`user32`/`kernel32`, `comdlg32`/`ole32`). Les avertissements **montent** de 31 à 46, et c'est attendu : voir ci-dessous |
 
 **Le portage compile.** `a5ad705` est le premier envoi où le job `windows` finit en `success` :
 `cargo build --release --locked --target x86_64-pc-windows-msvc` aboutit, et `lkatta.exe` est
@@ -230,7 +231,20 @@ environ 5 Mo : c'est la même chose compressée. À ne pas confondre avec le bud
 15 Mo du §2 — l'un est un fichier sur le disque, l'autre ce que le compagnon occupe en mémoire une
 fois lancé, et seul le second est une promesse du projet.
 
-### Ce qui reste : 31 avertissements, classés par fonctionnalité
+### Pourquoi les avertissements sont montés de 31 à 46
+
+Parce que le code mort est **transitif**, et que c'est la mesure qui le dit. `portail::ouvrir`
+n'est appelé par personne sous Windows — son appelant est `chat::joindre`, derrière la bulle de
+discussion, qui n'est pas encore câblée. Donc tout ce que `ouvrir` atteint seul est mort avec lui :
+`ouvrir_windows`, `dialogue`, la structure `OpenFileNameW`, les quatre fonctions Win32 déclarées,
+et le découpage de la réponse. Quinze avertissements d'un coup, pour une fonctionnalité écrite et
+correcte mais pas encore joignable.
+
+Ce n'est pas une régression et il ne faut pas le lire comme telle : câbler la bulle de discussion
+fera disparaître ces quinze-là **et** les quatre de `fichiers.rs`, puisque c'est la même chaîne.
+C'est même l'argument pour commencer par là — un seul branchement en éteint dix-neuf.
+
+### Ce qui reste : les avertissements, classés par fonctionnalité
 
 Plus aucune erreur. Le rapport de CI liste les avertissements `dead_code`, qui sont l'information
 la plus utile qu'il donne : **une fonction « never used » sous Windows est une fonctionnalité qui
@@ -239,7 +253,7 @@ fichiers. Rangés par ce qu'ils veulent dire, ils forment cinq chantiers :
 
 | Chantier | Emplacements signalés | Ce que ça change pour l'utilisateur | Étape |
 |---|---|---|---|
-| **Suivi des fenêtres** | `toplevels` (4 : `etats`, `mettre_a_jour`, `prendre_actions`, `marquer_disponible`), `bureau` (6 : `PONT`, `pont_actif`, `focaliser_bulle`, `from_json`/`visio`, `SCRIPT`, `charger_script`), `ipc::Msg::Fenetre`, `atspi_ailleurs::noter_fenetre` — **12** | Le maki ne monte pas sur les fenêtres et ne les évite pas ; la discrétion en visioconférence ne s'applique pas | 2 |
+| ~~**Suivi des fenêtres**~~ | ~~12~~ → **fait** : `bureau::demarrer` sonde `GetForegroundWindow` toutes les 400 ms et envoie `Msg::Fenetre`, que `win32.rs` traduit en `Ctx.avoid` et `Ctx.toit` | Le maki monte sur les fenêtres, les évite, et se tait en visioconférence ou en plein écran. Restent `toplevels` (4), qui suppose un inventaire des fenêtres que Windows ne donne pas sans UI Automation | 2 |
 | **Bulle de discussion et clavier** | `chat` (4 : variantes `Fermer`/`Close`, `fermable` + 4 méthodes, un groupe de méthodes), `saisie` (2 : `MAX`, un groupe de méthodes) — **6** | On ne peut pas encore taper au maki sous Windows. `draw::chat_bubble` est portable et prêt : il manque la saisie et l'enchaînement vers `brain` | 1 |
 | **Choix de fichiers** | `fichiers` (4 : `choisir`, `depuis_uri`, `liste_uri`, `repli`), `portail_ailleurs::ouvrir` — **5** | Aucune commande ne peut demander un fichier par dialogue ; il faut donner le chemin | 1 |
 | **Comportements du maki non déclenchés** | `behavior` (2 : `height`, puis `busy`/`danse`/`vanish_to`/`teleport_at`/`arrive`/`quitter_toit`), `draw` (2 : `hit`, champs `rect`/`close`) — **4** | Le maki marche, grimpe, dort et se laisse traîner. Il ne danse pas encore, ne disparaît pas, et les boutons de sa bulle ne sont pas cliquables | 1 |

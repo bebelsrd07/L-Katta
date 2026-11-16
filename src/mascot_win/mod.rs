@@ -31,9 +31,11 @@
 //! - **la bulle de discussion** : `draw::chat_bubble` et tout l'onglet des réglages sont
 //!   portables et prêts à servir, mais le clavier, la saisie et l'enchaînement vers `brain`
 //!   ne sont pas encore câblés ici ;
-//! - **le suivi de la fenêtre active** : `bureau::demarrer` ne fait rien sous Windows (§10 du
-//!   plan), donc `Ctx.avoid` et `Ctx.toit` restent vides — le maki ne monte pas sur les fenêtres
-//!   et ne les évite pas ;
+//! - **rien pour la fenêtre active** : elle est demandée au système par `bureau::demarrer`
+//!   (`GetForegroundWindow`, sondé toutes les 400 ms), donc le maki monte sur les fenêtres, les
+//!   évite, et se tait en visioconférence ou en plein écran. Ce qui manque encore est « Ne pas
+//!   déranger » et le micro occupé : leurs sondes passent par `gdbus` et `pactl`, qui n'existent
+//!   pas ici et rendent toujours faux — la règle de discrétion est donc incomplète, pas absente ;
 //! - **plusieurs écrans** : un seul moniteur est pris en compte, donc `Ctx.exits` est fermé
 //!   partout et le maki ne passe pas d'un écran à l'autre.
 //!

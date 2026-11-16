@@ -237,7 +237,13 @@ mod win {
 /// Les handles et le pointeur de procédure de rappel sont des `isize` : de la taille d'un
 /// pointeur, et cela évite de convertir une fonction en entier, ce que le compilateur signale à
 /// juste titre.
+///
+/// Beaucoup de ces champs ne sont jamais relus : ils sont remplis pour le système (`lpstrFilter`,
+/// `flags`), ou écrits par lui en retour (`nFileOffset`, `nFileExtension`), ou réservés
+/// (`pvReserved`). Les retirer décalerait tout ce qui suit — la structure est un contrat, pas un
+/// choix. D'où le `allow`, qui n'est pas là pour masquer du code mort.
 #[cfg(windows)]
+#[allow(dead_code)]
 #[repr(C)]
 struct OpenFileNameW {
     l_struct_size: u32,
