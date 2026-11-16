@@ -168,6 +168,7 @@ fn download(url: &str, to: &std::path::Path) -> Result<(), String> {
 }
 
 /// Le fichier installé est-il une AppImage (signature « AI\x02 » à l'octet 8) ?
+#[cfg(not(windows))]
 fn is_appimage(p: &std::path::Path) -> bool {
     use std::io::Read;
     let mut b = [0u8; 11];
@@ -184,6 +185,7 @@ pub fn install(rel: &Release) -> Result<String, String> {
         None => crate::paths::self_exe(),
     };
     let bin = installed_bin();
+    #[cfg(not(windows))]
     if is_appimage(&bin) && !rel.appimage.is_empty() {
         return install_appimage(rel, &bin);
     }
