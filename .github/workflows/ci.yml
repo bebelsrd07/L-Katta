@@ -147,7 +147,9 @@ jobs:
           grep -E '^error: aborting|^error\[E0463\]|could not compile' journal.txt | head -10 >> erreurs.txt
           # Et quels fichiers sont en cause, du plus chargé au moins : c'est la liste de travail
           # du portage, et elle permet de voir d'une passe si un fichier entier doit être fermé.
-          grep -oE -- '--> src/[A-Za-z0-9_/.]+\.rs' journal.txt | sed 's/--> //' | cut -d: -f1 | sort | uniq -c | sort -rn | head -25 > fichiers.txt
+          # cargo écrit les chemins avec le séparateur du système : `src\mascot\x11.rs` ici.
+          # Les deux séparateurs sont acceptés, sinon la liste reste vide sans qu'on sache pourquoi.
+          grep -oE -- '--> src[\\/][A-Za-z0-9_/.\\]+\.rs' journal.txt | sed -e 's/--> //' -e 's|\\|/|g' | cut -d: -f1 | sort | uniq -c | sort -rn | head -25 > fichiers.txt
           tail -60 journal.txt > fin.txt
           set -e
           {

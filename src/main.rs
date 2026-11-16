@@ -35,6 +35,14 @@ mod mascot;
 mod afaire;
 mod agenda;
 mod apps;
+// AT-SPI (lire le texte des fenêtres par l'accessibilité du bureau) n'existe que sous Linux.
+// Ailleurs, un module jumeau expose exactement la même API : les appelants — chat, tools,
+// mascot — n'ont pas à savoir sur quel système ils tournent, et un seul des deux fichiers est
+// jamais compilé.
+#[cfg(target_os = "linux")]
+mod atspi;
+#[cfg(not(target_os = "linux"))]
+#[path = "atspi_ailleurs.rs"]
 mod atspi;
 mod memoire;
 mod moteur;
@@ -55,6 +63,12 @@ mod notifs;
 mod terminal;
 mod tools;
 mod toplevels;
+// L'extension GNOME de L Katta parle à GNOME Shell par D-Bus, qui n'existe pas ailleurs.
+// Même principe qu'`atspi` : un jumeau, une seule API, un seul fichier compilé.
+#[cfg(target_os = "linux")]
+mod gnome;
+#[cfg(not(target_os = "linux"))]
+#[path = "gnome_ailleurs.rs"]
 mod gnome;
 mod web;
 
