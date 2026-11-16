@@ -25,7 +25,7 @@ fn read(path: &str) -> String {
 
 fn os_release() -> String {
     #[cfg(windows)]
-    return crate::os::win::version_windows();
+    return crate::os::win::version_windows().0;
     #[cfg(not(windows))]
     {
         let txt = read(&crate::hote::etc("/etc/os-release"));
@@ -38,7 +38,7 @@ fn os_release() -> String {
 
 fn cpu() -> String {
     #[cfg(windows)]
-    return crate::os::win::processeur().unwrap_or_else(|| "inconnu".into());
+    return crate::os::win::processeur();
     #[cfg(not(windows))]
     {
         let info = read("/proc/cpuinfo");
@@ -165,7 +165,7 @@ pub fn measure() -> String {
         "Win32 / DWM".to_string(),
         String::new(),
         std::env::var("USERNAME").unwrap_or_default(),
-        if which("pwsh") { "PowerShell 7".into() } else { "Windows PowerShell".into() },
+        if which("pwsh") { "PowerShell 7".to_string() } else { "Windows PowerShell".to_string() },
     );
     #[cfg(not(windows))]
     let (host, kernel, desktop, session, plasma, user, shell) = {

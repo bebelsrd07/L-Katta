@@ -179,9 +179,11 @@ fn appli_win(id: Option<String>, repli_id: &str, repli_nom: &str) -> Appli {
 pub fn detecter() -> Environnement {
     #[cfg(windows)]
     {
-        use crate::os::win::{association_extension, association_url, version_windows};
+        use crate::os::win::{appli_par_defaut, version_windows};
+        let association_url = |s: &str| appli_par_defaut(&format!(r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\{s}\UserChoice"));
+        let association_extension = |s: &str| appli_par_defaut(&format!(r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{s}\UserChoice"));
         let term = ["wt", "pwsh", "powershell", "cmd"].into_iter().find(|t| which(t)).unwrap_or("powershell").to_string();
-        let bureau = version_windows().split(" (").next().unwrap_or("Windows").to_string();
+        let bureau = version_windows().0;
         return Environnement {
             bureau,
             session: "win32".into(),

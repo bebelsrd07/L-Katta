@@ -247,6 +247,7 @@ pub fn install(rel: &Release) -> Result<String, String> {
     Ok(rel.version.clone())
 }
 
+#[cfg(not(windows))]
 fn install_appimage(rel: &Release, bin: &std::path::Path) -> Result<String, String> {
     let dir = paths::data_dir().join("maj");
     let _ = std::fs::remove_dir_all(&dir);

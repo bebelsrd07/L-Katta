@@ -156,10 +156,10 @@ pub fn texte() -> String {
     #[cfg(windows)]
     {
         let hote = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "—".into());
-        let modele = crate::os::win::modele_machine().unwrap_or_default();
+        let modele = crate::os::win::modele_machine();
         parts.push(format!(
             "## Système\n- {}\n- Machine : {hote}{}\n- Bureau : Windows (DWM)",
-            crate::os::win::version_windows(),
+            crate::os::win::version_windows().0,
             if modele.is_empty() { String::new() } else { format!(" — {modele}") },
         ));
     }
@@ -180,8 +180,9 @@ pub fn texte() -> String {
     let m = crate::local::machine();
     let mut mat = vec![];
     #[cfg(windows)]
-    if let Some(p) = crate::os::win::processeur() {
-        mat.push(format!("- Processeur : {p}"));
+    {
+        let p = crate::os::win::processeur();
+        if !p.is_empty() { mat.push(format!("- Processeur : {p}")); }
     }
     #[cfg(not(windows))]
     if let Some(p) = processeur(&lire("/proc/cpuinfo")) {

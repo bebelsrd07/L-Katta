@@ -260,7 +260,13 @@ pub fn launch(query: &str) -> Result<String, String> {
     let a = resolve(&apps, query).ok_or_else(|| format!("aucune application ne correspond à « {query} »"))?;
     #[cfg(windows)]
     {
-        crate::os::win::lancer_raccourci(std::path::Path::new(&a.exec))?;
+        if a.exec.to_ascii_lowercase().ends_with(".lnk") {
+            crate::os::win::lancer_raccourci_menu(std::path::Path::new(&a.exec))?;
+        } else if ["explorer.exe", "notepad.exe", "calc.exe", "mspaint.exe", "taskmgr.exe", "snippingtool.exe", "control.exe"].contains(&a.exec.as_str()) {
+            crate::hote::commande(&a.exec).spawn().map_err(|e| e.to_string())?;
+        } else {
+            return Err("Application Windows inconnue".into());
+        }
         return Ok(format!("Lancé : {} ({})", a.nom, a.id));
     }
     #[cfg(not(windows))]

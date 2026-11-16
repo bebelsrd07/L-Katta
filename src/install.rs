@@ -70,9 +70,9 @@ fn install_windows() -> Result<(), String> {
         let _ = std::fs::remove_file(&ancien);
     }
     let ico = dossier.join("lkatta.ico");
-    let pngs: Vec<Vec<u8>> = [16, 32, 48, 256].into_iter().filter_map(|t| icon(t).encode_png().ok()).collect();
-    let refs: Vec<&[u8]> = pngs.iter().map(Vec::as_slice).collect();
-    let _ = std::fs::write(&ico, crate::os::win::construire_ico(&refs));
+    if let Ok(png) = icon(256).encode_png() {
+        let _ = std::fs::write(&ico, crate::os::win::ico_depuis_png(&png, 0));
+    }
     let lnk = raccourci_menu_demarrer();
     if let Some(p) = lnk.parent() {
         let _ = std::fs::create_dir_all(p);
@@ -150,11 +150,11 @@ pub fn sync_autostart(on: bool) -> Result<String, String> {
     #[cfg(windows)]
     {
         if !on {
-            crate::os::win::reg_supprimer_valeur(crate::os::win::HKEY_CURRENT_USER, CLE_RUN, "LKatta");
+            crate::os::win::reg_supprimer_valeur(crate::os::win::HKCU, CLE_RUN, "LKatta");
             return Ok(t!("Démarrage automatique : désactivé.").into());
         }
         let cmd = crate::hote::lanceur_bureau();
-        crate::os::win::reg_ecrire_chaine(crate::os::win::HKEY_CURRENT_USER, CLE_RUN, "LKatta", &cmd)?;
+        crate::os::win::reg_ecrire_chaine(crate::os::win::HKCU, CLE_RUN, "LKatta", &cmd)?;
         return Ok(t!("Démarrage automatique : activé ({}).", r"HKCU\…\CurrentVersion\Run\LKatta"));
     }
     #[cfg(not(windows))]
@@ -182,7 +182,7 @@ pub fn sync_autostart(on: bool) -> Result<String, String> {
 pub fn uninstall() -> Result<(), String> {
     #[cfg(windows)]
     {
-        crate::os::win::reg_supprimer_valeur(crate::os::win::HKEY_CURRENT_USER, CLE_RUN, "LKatta");
+        crate::os::win::reg_supprimer_valeur(crate::os::win::HKCU, CLE_RUN, "LKatta");
         let _ = std::fs::remove_file(raccourci_menu_demarrer());
         let _ = crate::ipc::send("quitter");
         let bin = paths::binaire_installe();
