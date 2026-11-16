@@ -99,13 +99,13 @@ Le maki, la physique, les 6 espèces, le rendu tiny-skia · `regles.rs` + `auton
 
 ## 6. Le plan d'exécution
 
-| Étape | Livrable | Vérifiable sur Linux ? |
-|---|---|---|
-| **0 — Socle** | `src/os/`, `Cargo.toml` découpé par cible, canal portable, **job CI `windows-latest`** | ✅ oui |
-| **1 — MVP Windows** | `mascot/win32.rs`, Named Pipes, Credential Manager, outils de base | ⚠️ compile via CI |
-| **2 — Parité Windows** | discrétion, `controle.rs`, UI Automation, capture écran, Terminal, auto-update `.exe` | ⚠️ compile via CI |
-| **3 — Notion natif** | `src/integrations/notion.rs`, 6 outils IA, accueil matinal, `/notion`, cache FTS5, onglet Intégrations | ✅ **oui, entièrement** |
-| **4 — Écosystème** | `lkatta-hook` + pont agents, client MCP, webhooks n8n/Make | ✅ oui (sauf le tuyau Windows) |
+| Étape | Livrable | Vérifiable sur Linux ? | État |
+|---|---|---|---|
+| **0 — Socle** | `src/os/`, `Cargo.toml` découpé par cible, canal portable, **job CI `windows-latest`** | ✅ oui | 🟡 entamée : job CI en place, `Cargo.toml` découpé par cible |
+| **1 — MVP Windows** | `mascot/win32.rs`, Named Pipes, Credential Manager, outils de base | ⚠️ compile via CI | ⬜ |
+| **2 — Parité Windows** | discrétion, `controle.rs`, UI Automation, capture écran, Terminal, auto-update `.exe` | ⚠️ compile via CI | ⬜ |
+| **3 — Notion natif** | `src/integrations/notion.rs`, 6 outils IA, accueil matinal, `/notion`, cache FTS5, onglet Intégrations | ✅ **oui, entièrement** | 🟢 **6 outils + CLI + onglet Intégrations livrés, CI verte** ; restent accueil matinal, `/notion`, cache FTS5 |
+| **4 — Écosystème** | `lkatta-hook` + pont agents, client MCP, webhooks n8n/Make | ✅ oui (sauf le tuyau Windows) | ⬜ |
 
 ### 👉 Ma recommandation : **commencer par l'étape 3 (Notion), pas par l'étape 0**
 
@@ -139,3 +139,35 @@ Ainsi chaque patch est **réellement compilé et testé**, pas seulement écrit.
 1. Par quelle étape on démarre — **3 (Notion)** comme je le recommande, **0 (socle Windows)**, ou **4 (pont agents façon coucou)** ?
 2. Quels connecteurs prioritaires en plus de Notion ?
 3. CI comme compilateur, ou tu compiles chez toi ?
+
+---
+
+## 9. Écran de verrouillage Windows : ce qui est possible, et ce qui ne l'est pas
+
+Tu as demandé les widgets de verrouillage de Windows, et même l'écran de verrouillage lui-même. Réponse honnête : il y a un mur technique **et** un mur de sécurité, et le second est de ton côté.
+
+### 🔴 Ce que Windows refuse
+
+**Dessiner sur l'écran de verrouillage.** Session verrouillée = Windows bascule sur un *bureau sécurisé* (celui de Winlogon). Aucune application ordinaire n'y est visible, aucune ne peut y dessiner. C'est précisément ce qui protège l'invite de mot de passe et l'UAC : un programme capable de dessiner là pourrait imiter une invite de mot de passe — la technique de base des voleurs d'identifiants. Chercher à le faire, c'est produire un binaire que les antivirus signalent, et casser ta règle n° 2 (le modèle de sécurité intact). **Donc non, et c'est une bonne nouvelle.**
+
+**Les widgets de l'écran de verrouillage de Windows 11** (météo, sport, trafic) viennent de la plateforme Widgets de Microsoft, qui choisit elle-même ce qu'elle y affiche. Il n'existe pas d'API publique pour y placer son propre widget.
+*À revérifier documentation en main : depuis cet espace de travail, seuls `github.com`, `pypi.org` et `registry.npmjs.org` sont joignables — pas `learn.microsoft.com`. Ce paragraphe vient donc de ce que je sais, pas de ce que j'ai pu lire aujourd'hui.*
+
+**Les widgets tiers du volet Widgets (Win+W)** existent, mais ce sont des widgets **web** : paquet MSIX, HTML/JS, cartes adaptatives — WebView2 sous le capot. Frontalement contraire à « pas de WebView, un seul binaire léger ».
+
+**Le badge sur l'écran de verrouillage** (la pastille chiffrée des applications UWP) existe vraiment, mais exige un paquet **MSIX** signé plus l'accord de l'utilisateur dans Paramètres › Personnalisation › Écran de verrouillage. MSIX, c'est un installeur et une signature : on perd « un seul `.exe` ». Envisageable un jour comme **option facultative**, pas comme socle.
+
+### 🟢 Ce qui est 100 % natif, sans WebView, et qui donne le même résultat en pratique
+
+1. **Les notifications sur l'écran de verrouillage.** Le seul contenu tiers que Windows affiche vraiment sur le vrai écran de verrouillage — et il ne demande **aucune API spéciale** : émettre des toasts Windows suffit (déjà prévu à l'étape 2, `notifs.rs`). L'utilisateur coche « Afficher les notifications sur l'écran de verrouillage » pour L Katta. Concrètement : « 3 tâches Notion en retard », « Hery t'a écrit », « sauvegarde terminée » — lisibles sans déverrouiller.
+2. **Un économiseur d'écran : `lkatta.exe /s`.** La place native du maki en plein écran quand la machine est inactive. Un `.scr` n'est qu'un `.exe` qui répond à `/s` (lancer), `/c` (configurer), `/p` (aperçu) : Win32 pur, aucune dépendance nouvelle, ni paquet ni signature. **Le même binaire** fait l'assistant et l'écran de veille — on reste à « un seul `.exe` ». Beaucoup d'options : espèce, taille, nombre de makis, fond, réveil au mouvement, verrouiller à la reprise.
+   *Honnêteté : un économiseur d'écran n'est pas un verrou, il est décoratif. La session n'est protégée que si « À la reprise, afficher l'écran de connexion » est coché — et alors c'est Windows qui verrouille, pas nous.*
+3. **Un widget de bureau.** Petite fenêtre toujours au-dessus, épinglée dans un coin : prochaine tâche, tâches Notion du jour, morceau en cours. Même rendu que la bulle (tiny-skia → `UpdateLayeredWindow`), donc rien de nouveau côté dessin. Options : contenu, coin, opacité, masqué en plein écran.
+4. **La pastille sur l'icône de la barre des tâches** (`ITaskbarList3::SetOverlayIcon`) : un nombre de non-lus, un point d'enregistrement. Win32 pur.
+5. **La liste de sauts** (`ICustomDestinationList`) : clic droit sur l'icône → « Nouvelle note Notion », « Chercher… », « Regarder l'écran ». Win32 pur.
+
+### Ce que je propose
+
+Prendre **1 + 2 + 3 + 4 + 5** comme « intégration native à 100 % avec beaucoup d'options », laisser de côté le dessin direct sur l'écran de verrouillage — pas par manque d'ambition : Windows le refuse, et ta règle de sécurité le refuse aussi. Les notifications sur l'écran de verrouillage donnent l'essentiel, l'information utile visible sans déverrouiller ; l'économiseur d'écran donne le maki en plein écran.
+
+**Ordre concret :** étapes 0 → 1 → 2 d'abord (rien de tout ceci n'existe sans le portage), puis dans l'étape 2 : toasts (1), barre des tâches (4), liste de sauts (5) ; enfin le widget de bureau (3) et l'économiseur d'écran (2), qui sont du dessin pur et se greffent sur `mascot/win32.rs`.

@@ -14,9 +14,8 @@ name = "lkatta"
 path = "src/main.rs"
 
 [dependencies]
-# Surcouche du maki : Wayland natif (layer-shell), rendu logiciel, aucune dépendance système.
-smithay-client-toolkit = { version = "0.20", default-features = false, features = ["calloop", "xkbcommon"] }
-wayland-client = "0.31"
+# Portables : aucun de ces crates ne dépend d'un système. Rendu logiciel, texte, réseau, JSON,
+# SQLite embarquée — la même base sur Linux et sur Windows, pour un seul binaire.
 tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd", "png-format"] }
 ab_glyph = "0.2"
 # Cerveau et outils.
@@ -25,21 +24,39 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.9"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-notify-rust = "4"
 walkdir = "2"
 roxmltree = "0.21"
 fastrand = "2"
 regex-lite = "0.1"
-zbus = { version = "6", default-features = false, features = ["default-rt", "service"] }
-wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 base64 = "0.22"
-libc = "0.2"
 rusqlite = { version = "0.42.0", features = ["bundled"] }
 ed25519-compact = { version = "2.6.1", default-features = false, features = ["std"] }
 futures-lite = "2"
+
+# Linux : Wayland natif (layer-shell), X11, D-Bus, libc.
+#
+# Sous une table par cible pour qu'un `cargo check` visant Windows ne les résolve même pas.
+# `wayland-sys` commence par `use std::os::unix::io::RawFd`, qui n'existe pas sur Windows :
+# tant que ces crates étaient dans `[dependencies]`, ils cassaient la compilation avant même
+# que le code de L Katta soit examiné (c'est ce que rapportait le job CI `windows`).
+#
+# Déplacer une dépendance ici ne change pas le `Cargo.lock`, qui liste l'union des
+# dépendances quelle que soit leur cible : le `--locked` de la CI reste satisfait, et aucune
+# version ne bouge.
+[target.'cfg(target_os = "linux")'.dependencies]
+smithay-client-toolkit = { version = "0.20", default-features = false, features = ["calloop", "xkbcommon"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
 x11rb = { version = "0.14", features = ["shape", "randr", "cursor"] }
 xkbcommon = { version = "0.8", default-features = false }
+zbus = { version = "6", default-features = false, features = ["default-rt", "service"] }
+notify-rust = "4"
+libc = "0.2"
+
+# Windows : rien pour l'instant. Les liaisons Win32 arriveront avec l'étape 1 du portage
+# (docs/PLAN.md). Une dépendance nouvelle exige un `Cargo.lock` mis à jour, ce qui ne peut se
+# faire qu'avec cargo en main — donc pas depuis cet environnement.
 
 [profile.dev.package."*"]
 opt-level = 2
