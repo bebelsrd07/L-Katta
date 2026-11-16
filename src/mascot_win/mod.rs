@@ -28,9 +28,10 @@
 //!
 //! Elle est plus courte que `mascot/mod.rs`, et c'est assumé. Manquent à ce jour :
 //!
-//! - **la bulle de discussion** : `draw::chat_bubble` et tout l'onglet des réglages sont
-//!   portables et prêts à servir, mais le clavier, la saisie et l'enchaînement vers `brain`
-//!   ne sont pas encore câblés ici ;
+//! - **les boutons d'action sous une bulle spontanée** : `actions_for` vit dans `mascot/mod.rs`
+//!   et dépend de ses outils (historique, fils, courriel). La bulle de discussion, elle, est
+//!   branchée entièrement — clics sur les 27 zones du tracé, clavier, presse-papiers, historique
+//!   des fils, réglages et choix de fichiers ;
 //! - **rien pour la fenêtre active** : elle est demandée au système par `bureau::demarrer`
 //!   (`GetForegroundWindow`, sondé toutes les 400 ms), donc le maki monte sur les fenêtres, les
 //!   évite, et se tait en visioconférence ou en plein écran. Ce qui manque encore est « Ne pas

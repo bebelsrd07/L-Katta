@@ -197,6 +197,7 @@ pub const T: &[(&str, &str)] = &[
     ("Rappel", "Reminder"),
     ("Voilà !", "Here you go!"),
     ("Réponse copiée dans le presse-papiers.", "Answer copied to the clipboard."),
+    ("Le navigateur n'a pas pu s'ouvrir.", "The browser could not be opened."),
     ("{} : {}. Explique-moi simplement et dis-moi quoi faire.", "{}: {}. Explain it simply and tell me what to do."),
     ("Résume mes nouveaux mails non lus en quelques lignes, du plus important au moins important.", "Summarize my new unread emails in a few lines, from most to least important."),
     // Assistant de premier lancement.

@@ -102,7 +102,7 @@ Le maki, la physique, les 6 espèces, le rendu tiny-skia · `regles.rs` + `auton
 | Étape | Livrable | Vérifiable sur Linux ? | État |
 |---|---|---|---|
 | **0 — Socle** | `src/os/`, `Cargo.toml` découpé par cible, canal portable, **job CI `windows-latest`** | ✅ oui | 🟢 **finie** : `src/os/` livré (10 concerns dont le canal), `Cargo.toml` découpé, six jumeaux (AT-SPI, GNOME, portail, canal, transport, mascotte). **67 → 44 → 7 → 0 erreur Windows**, et le job `windows` passe en `success` |
-| **1 — MVP Windows** | `mascot/win32.rs`, Named Pipes, Credential Manager, outils de base | ⚠️ compile via CI | 🟡 **entamée, mesurée** : `lkatta.exe` compile en release (**5 146 805 octets**) et est publié comme artefact ; le maki s'affiche par `UpdateLayeredWindow`, les commandes passent par un tube nommé vérifié dans les deux sens. Restent la bulle de discussion, le suivi de la fenêtre active, le multi-écrans, Credential Manager et `RegisterHotKey` (§10) |
+| **1 — MVP Windows** | `mascot/win32.rs`, Named Pipes, Credential Manager, outils de base | ⚠️ compile via CI | 🟢 **l'essentiel est livré** : `lkatta.exe` compile en release et est publié comme artefact ; le maki s'affiche par `UpdateLayeredWindow`, les commandes passent par un tube nommé vérifié dans les deux sens, la fenêtre active est suivie, et **la bulle de discussion est branchée** — clavier, presse-papiers, historique des fils, réglages et choix de fichiers compris. Restent le multi-écrans, Credential Manager et `RegisterHotKey` (§10) |
 | **2 — Parité Windows** | discrétion, `controle.rs`, UI Automation, capture écran, Terminal, auto-update `.exe` | ⚠️ compile via CI | 🟡 **commencée** : la discrétion marche par la fenêtre active (visio, présentation, plein écran) et le maki monte sur les fenêtres. Restent « Ne pas déranger », le micro, UI Automation, la capture et l'auto-update |
 | **3 — Notion natif** | `src/integrations/notion.rs`, 6 outils IA, accueil matinal, `/notion`, cache FTS5, onglet Intégrations | ✅ **oui, entièrement** | 🟢 **6 outils + CLI + onglet Intégrations livrés, CI verte** ; restent accueil matinal, `/notion`, cache FTS5 |
 | **4 — Écosystème** | `lkatta-hook` + pont agents, client MCP, webhooks n8n/Make | ✅ oui (sauf le tuyau Windows) | ⬜ |
@@ -219,6 +219,7 @@ testé localement. Chaque chiffre ci-dessous vient d'un rapport de CI, pas d'une
 | `05236c8` | 7 | La mascotte a son jumeau Win32 (`src/mascot_win/`), le transport de commandes est séparé du protocole, le service D-Bus de `bureau.rs` passe sous `cfg` |
 | `a5ad705` | **0** | Le reste venait de mon propre code Win32 : des poignées `isize` sans `is_null()`, un double emprunt, et `futures-lite` devenu Linux seul. **`cargo build --release` passe, `lkatta.exe` est produit** |
 | `65e0f5a` | 0 (46 avertissements) | Le presse-papiers et la fenêtre « Ouvrir » parlent à Windows (`user32`/`kernel32`, `comdlg32`/`ole32`). Les avertissements **montent** de 31 à 46, et c'est attendu : voir ci-dessous |
+| `e06b1cb` | 0 (**42**) | Le suivi de la fenêtre active : `bureau::demarrer` sonde `GetForegroundWindow` toutes les 400 ms et émet `Msg::Fenetre`, traduit en `Ctx.avoid` et `Ctx.toit`. Quatre emplacements deviennent vivants |
 
 **Le portage compile.** `a5ad705` est le premier envoi où le job `windows` finit en `success` :
 `cargo build --release --locked --target x86_64-pc-windows-msvc` aboutit, et `lkatta.exe` est
@@ -226,23 +227,26 @@ publié comme artefact `lkatta-windows-x64` du run. La CI Linux reste verte à c
 `mascot/mod.rs`, `mascot/x11.rs` et `Cargo.lock` n'ont pas été modifiés d'un octet : les jumeaux
 ajoutent, ils ne remplacent pas.
 
-Le binaire pèse **10 689 536 octets** (10,2 Mo), mesuré sur `7a7c5e7`. L'artefact téléchargé fait
+Le binaire pèse **10 686 464 octets** (10,2 Mo), mesuré sur `e06b1cb`. L'artefact téléchargé fait
 environ 5 Mo : c'est la même chose compressée. À ne pas confondre avec le budget de **RAM** d'environ
 15 Mo du §2 — l'un est un fichier sur le disque, l'autre ce que le compagnon occupe en mémoire une
 fois lancé, et seul le second est une promesse du projet.
 
-### Pourquoi les avertissements sont montés de 31 à 46
+### Pourquoi les avertissements sont montés de 31 à 46, puis redescendus
 
 Parce que le code mort est **transitif**, et que c'est la mesure qui le dit. `portail::ouvrir`
-n'est appelé par personne sous Windows — son appelant est `chat::joindre`, derrière la bulle de
-discussion, qui n'est pas encore câblée. Donc tout ce que `ouvrir` atteint seul est mort avec lui :
-`ouvrir_windows`, `dialogue`, la structure `OpenFileNameW`, les quatre fonctions Win32 déclarées,
-et le découpage de la réponse. Quinze avertissements d'un coup, pour une fonctionnalité écrite et
-correcte mais pas encore joignable.
+n'était appelé par personne sous Windows — son appelant est `chat::joindre`, derrière la bulle de
+discussion, qui n'était pas encore câblée. Donc tout ce que `ouvrir` atteint seul était mort avec
+lui : `ouvrir_windows`, `dialogue`, la structure `OpenFileNameW`, les quatre fonctions Win32
+déclarées, et le découpage de la réponse. Quinze avertissements d'un coup, pour une fonctionnalité
+écrite et correcte mais pas encore joignable.
 
-Ce n'est pas une régression et il ne faut pas le lire comme telle : câbler la bulle de discussion
-fera disparaître ces quinze-là **et** les quatre de `fichiers.rs`, puisque c'est la même chaîne.
-C'est même l'argument pour commencer par là — un seul branchement en éteint dix-neuf.
+Ce n'était pas une régression, et la suite l'a montré. Câbler le suivi de la fenêtre active a fait
+tomber **46 → 42** (`e06b1cb`) : quatre emplacements de `bureau.rs` et d'`ipc.rs` sont devenus
+vivants d'un coup. Brancher la bulle de discussion éteint la chaîne du choix de fichiers — les
+quinze du portail **et** les quatre de `fichiers.rs`, puisque c'est le même appelant — plus ce que
+`chat` et `saisie` atteignaient seuls. Un seul branchement en éteint une vingtaine : c'était
+l'argument pour commencer par là, et c'est ce qui est fait.
 
 ### Ce qui reste : les avertissements, classés par fonctionnalité
 
@@ -254,9 +258,9 @@ fichiers. Rangés par ce qu'ils veulent dire, ils forment cinq chantiers :
 | Chantier | Emplacements signalés | Ce que ça change pour l'utilisateur | Étape |
 |---|---|---|---|
 | ~~**Suivi des fenêtres**~~ | ~~12~~ → **fait** : `bureau::demarrer` sonde `GetForegroundWindow` toutes les 400 ms et envoie `Msg::Fenetre`, que `win32.rs` traduit en `Ctx.avoid` et `Ctx.toit` | Le maki monte sur les fenêtres, les évite, et se tait en visioconférence ou en plein écran. Restent `toplevels` (4), qui suppose un inventaire des fenêtres que Windows ne donne pas sans UI Automation | 2 |
-| **Bulle de discussion et clavier** | `chat` (4 : variantes `Fermer`/`Close`, `fermable` + 4 méthodes, un groupe de méthodes), `saisie` (2 : `MAX`, un groupe de méthodes) — **6** | On ne peut pas encore taper au maki sous Windows. `draw::chat_bubble` est portable et prêt : il manque la saisie et l'enchaînement vers `brain` | 1 |
-| **Choix de fichiers** | `fichiers` (4 : `choisir`, `depuis_uri`, `liste_uri`, `repli`), `portail_ailleurs::ouvrir` — **5** | Aucune commande ne peut demander un fichier par dialogue ; il faut donner le chemin | 1 |
-| **Comportements du maki non déclenchés** | `behavior` (2 : `height`, puis `busy`/`danse`/`vanish_to`/`teleport_at`/`arrive`/`quitter_toit`), `draw` (2 : `hit`, champs `rect`/`close`) — **4** | Le maki marche, grimpe, dort et se laisse traîner. Il ne danse pas encore, ne disparaît pas, et les boutons de sa bulle ne sont pas cliquables | 1 |
+| ~~**Bulle de discussion et clavier**~~ | ~~6~~ → **fait** : `win32.rs` appelle `draw::chat_bubble`, route les clics sur les 27 zones du tracé, prend le clavier le temps de la discussion et traite `WM_CHAR`/`WM_KEYDOWN` | On tape au maki sous Windows : saisie, curseur, sélection, copier-couper-coller, Entrée, Échap, historique des fils, réglages, confirmation | 1 |
+| ~~**Choix de fichiers**~~ | ~~5~~ → **fait** par la même chaîne : le trombone de la saisie appelle `chat::joindre`, donc `fichiers::choisir`, donc `portail_ailleurs::ouvrir` et `GetOpenFileNameW` | Joindre des fichiers à une demande marche, avec la boîte de dialogue native et la sélection multiple | 1 |
+| **Comportements du maki non déclenchés** | `behavior` (`busy`/`danse`/`vanish_to`/`teleport_at`/`arrive`) — **1** (`height` sert maintenant à cadrer l'arbre, `hit` et les champs `rect`/`close` servent aux clics) | Le maki marche, grimpe, dort, se laisse traîner et réagit aux clics. Il ne danse pas encore sur demande et ne disparaît pas | 1 |
 | **Notifications, chemins, auto-relance** | `notifs::compte`, `os::osstring_depuis_octets`, `hote::relancer_lkatta` — **3** | Le compteur de notifications n'a pas de source, et une mise à jour ne peut pas relancer l'application | 2 |
 
 Cette liste est générée par la CI, pas tenue à la main : elle ne peut donc pas se mettre à mentir.
@@ -286,12 +290,20 @@ Le jumeau `src/mascot_win/mod.rs` fait 63 lignes : il redéclare les quatre sous
 leurs frères sont déclarés là aussi), puis il expose `run` avec la même signature. Rien n'est
 dupliqué, et si le comportement du maki change, les deux cibles changent ensemble.
 
-Ce qui est écrit pour de bon, c'est `src/mascot_win/win32.rs` (851 lignes) : une fenêtre en
+Ce qui est écrit pour de bon, c'est `src/mascot_win/win32.rs` (1 625 lignes) : une fenêtre en
 calques `WS_EX_LAYERED` avec `UpdateLayeredWindow`, qui donne la zone cliquable gratuitement —
 Windows laisse passer la souris là où l'alpha est nul, donc aucun `WM_NCHITTEST` ni région à
-recalculer à chaque image. Elle est aussi `NOACTIVATE` : prendre le clavier de l'utilisateur pour
-un lémurien serait une faute. Le rendu suit l'enchaînement exact de la version Linux, mêmes
-constantes (470×560 pixels logiques, même calcul d'échelle, même rectangle selon la pose).
+recalculer à chaque image. Le rendu suit l'enchaînement exact de la version Linux, mêmes constantes
+(470×560 pixels logiques au minimum, même calcul d'échelle, même rectangle selon la pose), et la
+surface grandit pour contenir la liane, l'arbre ou la bulle — comme sous Wayland, avec la même
+marge de 200 px avant de rétrécir, pour qu'une réponse qui s'écrit ligne à ligne ne fasse pas
+trembler la fenêtre.
+
+Elle est aussi `NOACTIVATE` : prendre le clavier de l'utilisateur pour un lémurien serait une
+faute. Mais une fenêtre qui ne peut pas être activée ne reçoit aucune touche — il faut donc lever
+cet attribut le temps d'une discussion, et le remettre dès qu'elle se ferme. C'est
+`prendre_clavier`, un basculement assumé plutôt qu'une fenêtre activable en permanence : hors
+discussion, le maki ne peut toujours pas voler le clavier.
 
 ### Le backend Win32 n'a pas besoin de dépendance nouvelle
 
