@@ -314,7 +314,7 @@ pub fn run(cfg: Config, rx: crate::os::canal::Recepteur<Msg>) -> Result<(), Stri
         return Err("la classe de fenêtre n'a pas pu être enregistrée".into());
     }
 
-    // SAFETY : création d'une fenêtre surgissante sans parent ; NULL en cas d'échec.
+    // SAFETY : création d'une fenêtre surgissante sans parent ; 0 en cas d'échec.
     let fenetre = unsafe {
         CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
@@ -331,7 +331,7 @@ pub fn run(cfg: Config, rx: crate::os::canal::Recepteur<Msg>) -> Result<(), Stri
             std::ptr::null_mut(),
         )
     };
-    if fenetre.is_null() {
+    if fenetre == 0 {
         return Err("la fenêtre du maki n'a pas pu être créée".into());
     }
 
@@ -735,7 +735,7 @@ fn zone_de_travail() -> RECT {
 fn rapport_echelle() -> f32 {
     // SAFETY : DC de l'écran, obtenu puis rendu ; `GetDeviceCaps` ne fait que lire.
     let dc = unsafe { GetDC(0) };
-    if dc.is_null() {
+    if dc == 0 {
         return 1.0;
     }
     let ppp = unsafe { GetDeviceCaps(dc, LOGPIXELSX) };
@@ -751,13 +751,13 @@ fn rapport_echelle() -> f32 {
 fn dib(largeur: u32, hauteur: u32) -> Result<(isize, isize, *mut u8), String> {
     // SAFETY : DC de l'écran, prêté le temps de créer un DC compatible, puis rendu.
     let ecran = unsafe { GetDC(0) };
-    if ecran.is_null() {
+    if ecran == 0 {
         return Err("aucun écran disponible".into());
     }
     // SAFETY : DC compatible avec l'écran.
     let dc = unsafe { CreateCompatibleDC(ecran) };
     unsafe { ReleaseDC(0, ecran) };
-    if dc.is_null() {
+    if dc == 0 {
         return Err("le DC mémoire n'a pas pu être créé".into());
     }
 
@@ -780,7 +780,7 @@ fn dib(largeur: u32, hauteur: u32) -> Result<(isize, isize, *mut u8), String> {
     // SAFETY : l'en-tête décrit 32 bits sans compression, donc aucune table de couleurs n'est
     // attendue après lui ; `bits` reçoit le pointeur du tampon, alloué par Windows.
     let bit = unsafe { CreateDIBSection(dc, &mut entete, DIB_RGB_COLORS, &mut bits, 0, 0) };
-    if bit.is_null() || bits.is_null() {
+    if bit == 0 || bits.is_null() {
         // SAFETY : le DC créé plus haut ne doit pas fuir.
         unsafe { DeleteDC(dc) };
         return Err("le bitmap de la fenêtre n'a pas pu être créé".into());

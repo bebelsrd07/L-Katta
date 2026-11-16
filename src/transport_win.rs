@@ -134,7 +134,7 @@ fn sid_du_processus(pid: u32) -> Option<Sid> {
     // SAFETY : ouverture en lecture seule d'un processus ; poignée nulle en cas d'échec, fermée
     // sur tous les chemins de retour.
     let processus = unsafe { OpenProcess(REQUETER, 0, pid) };
-    if processus.is_null() {
+    if processus == 0 {
         return None;
     }
     let r = (|| {
@@ -186,16 +186,27 @@ struct Sid(Vec<u8>);
 
 impl Sid {
     /// Pointeur vers le SID lui-même : premier champ de `TOKEN_USER`, donc premier mot du tampon.
-    fn pointeur(&self) -> *const c_void {
-        let mut mot = [0u8; std::mem::size_of::<usize>()];
-        mot.copy_from_slice(&self.0[..mot.len()]);
-        usize::from_ne_bytes(mot) as *const c_void
+    ///
+    /// `None` si le tampon est trop court ou si le pointeur est nul. Ni l'un ni l'autre ne doit
+    /// arriver, mais deviner une valeur ici voudrait dire comparer autre chose que des SID — et
+    /// `EqualSid` avec un pointeur nul est indéfini, pas seulement faux.
+    fn pointeur(&self) -> Option<*const c_void> {
+        const MOT: usize = std::mem::size_of::<usize>();
+        if self.0.len() < MOT {
+            return None;
+        }
+        let mut octets = [0u8; MOT];
+        octets.copy_from_slice(&self.0[..MOT]);
+        let adresse = usize::from_ne_bytes(octets);
+        (adresse != 0).then_some(adresse as *const c_void)
     }
 
     fn egal(&self, autre: &Sid) -> bool {
-        // SAFETY : les deux tampons sont vivants (ils sont dans `self` et `autre`), et les deux
-        // pointeurs viennent de `GetTokenInformation`.
-        unsafe { EqualSid(self.pointeur(), autre.pointeur()) != 0 }
+        // Un SID illisible des deux côtés ne fait pas « égaux » : il fait « inconnu », donc refusé.
+        let (Some(a), Some(b)) = (self.pointeur(), autre.pointeur()) else { return false };
+        // SAFETY : les deux tampons sont vivants (ils sont dans `self` et `autre`), les deux
+        // pointeurs viennent de `GetTokenInformation` et viennent d'être vérifiés non nuls.
+        unsafe { EqualSid(a, b) != 0 }
     }
 }
 
