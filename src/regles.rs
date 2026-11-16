@@ -102,10 +102,22 @@ conversation. Pour les changer, il faut modifier ce fichier.
 ";
 
 fn system_dir() -> PathBuf {
-    // Dans le Flatpak, /etc est celui du bac à sable : les règles de l'administrateur sont
-    // dans /run/host/etc (accès host-etc du manifeste).
-    let defaut = if crate::hote::flatpak() { "/run/host/etc/lkatta" } else { "/etc/lkatta" };
-    PathBuf::from(std::env::var("LKATTA_ETC").unwrap_or_else(|_| defaut.into()))
+    if let Ok(e) = std::env::var("LKATTA_ETC") {
+        return PathBuf::from(e);
+    }
+    #[cfg(windows)]
+    {
+        return std::env::var_os("ProgramData")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
+            .join("lkatta");
+    }
+    #[cfg(not(windows))]
+    {
+        // Dans le Flatpak, /etc est celui du bac à sable : les règles de l'administrateur sont
+        // dans /run/host/etc (accès host-etc du manifeste).
+        PathBuf::from(if crate::hote::flatpak() { "/run/host/etc/lkatta" } else { "/etc/lkatta" })
+    }
 }
 
 fn read_toml(p: &Path) -> Option<Regles> {
@@ -292,6 +304,35 @@ const TOUJOURS_INTERDITS: &[&str] = &[
     "~/.local/share/lkatta/fils",
     "~/.local/share/lkatta/historique.jsonl",
     "~/.local/share/lkatta/captures",
+    // Équivalents Windows (trousseaux DPAPI, navigateurs, démarrage automatique, L Katta).
+    "~/AppData/Roaming/Microsoft/Credentials",
+    "~/AppData/Local/Microsoft/Credentials",
+    "~/AppData/Roaming/Microsoft/Protect",
+    "~/AppData/Local/Microsoft/Vault",
+    "~/AppData/Roaming/Bitwarden",
+    "~/AppData/Roaming/keepassxc",
+    "~/AppData/Roaming/1Password",
+    "~/AppData/Local/1Password",
+    "~/AppData/Roaming/gh",
+    "~/AppData/Roaming/gcloud",
+    "~/AppData/Local/Google/Cloud SDK",
+    "~/AppData/Roaming/rclone",
+    "~/AppData/Local/Google/Chrome",
+    "~/AppData/Local/Chromium",
+    "~/AppData/Local/BraveSoftware",
+    "~/AppData/Local/Microsoft/Edge",
+    "~/AppData/Local/Vivaldi",
+    "~/AppData/Roaming/Mozilla/Firefox/Profiles/*/logins.json",
+    "~/AppData/Roaming/Mozilla/Firefox/Profiles/*/key4.db",
+    "~/AppData/Roaming/Mozilla/Firefox/Profiles/*/cookies.sqlite",
+    "~/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup",
+    "~/AppData/Roaming/lkatta",
+    "~/AppData/Local/lkatta/presse-papiers.json",
+    "~/AppData/Local/lkatta/notifications.json",
+    "~/AppData/Local/lkatta/index.db",
+    "~/AppData/Local/lkatta/fils",
+    "~/AppData/Local/lkatta/historique.jsonl",
+    "~/AppData/Local/lkatta/captures",
 ];
 
 /// Chemin nettoyé sans toucher au disque : `a//b/./c/../d` → `a/b/d`.
@@ -310,9 +351,18 @@ pub fn normaliser(p: &Path) -> PathBuf {
     out
 }
 
-/// Motif glob simple (`*` = n'importe quelle suite de caractères sauf `/`).
-fn glob_prefix(pattern: &Path, path: &Path) -> bool {
-    let (p, q) = (pattern.to_string_lossy(), path.to_string_lossy());
+/// Compare un chemin à un motif glob simple (`*` = n'importe quelle suite de caractères sauf `/`).
+/// Sous Windows (`insensible = true`), les antislashes, le préfixe `\\?\` de `canonicalize` et la
+/// casse NTFS sont unifiés avant la comparaison : `C:\Users\moi\.SSH\id_rsa` ne contourne jamais
+/// `~/.ssh`.
+fn glob_prefix_canon(pattern: &str, path: &str, insensible: bool) -> bool {
+    let net = |s: &str| {
+        let s = s.strip_prefix(r"\\?\").unwrap_or(s);
+        let s = if s.contains('\\') { s.replace('\\', "/") } else { s.to_string() };
+        let s = if s.len() > 1 { s.trim_end_matches('/').to_string() } else { s };
+        if insensible { s.to_lowercase() } else { s }
+    };
+    let (p, q) = (net(pattern), net(path));
     if !p.contains('*') {
         return q == p || q.starts_with(&format!("{p}/"));
     }
@@ -337,6 +387,10 @@ fn glob_prefix(pattern: &Path, path: &Path) -> bool {
     true
 }
 
+fn glob_prefix(pattern: &Path, path: &Path) -> bool {
+    glob_prefix_canon(&pattern.to_string_lossy(), &path.to_string_lossy(), cfg!(windows))
+}
+
 impl Regles {
     /// Chemins interdits, développés (pour les masquer dans le bac à sable).
     pub fn chemins_interdits(&self) -> Vec<PathBuf> {
@@ -346,12 +400,27 @@ impl Regles {
     fn forbidden_paths(&self) -> Vec<PathBuf> {
         // Les « ~ » se lisent depuis le dossier personnel, jamais depuis le dossier de travail.
         let home = paths::home_dir();
-        let abs = |d: &str| match d.strip_prefix("~/") {
+        let abs = |d: &str| match d.strip_prefix("~/").or_else(|| d.strip_prefix(r"~\")) {
             Some(r) => home.join(r),
             None if d == "~" => home.clone(),
             None => PathBuf::from(d),
         };
-        self.dossiers_interdits.iter().map(|d| abs(d)).chain(TOUJOURS_INTERDITS.iter().map(|d| abs(d))).collect()
+        let data = paths::data_dir();
+        let propres = [
+            paths::config_dir(),
+            data.join("presse-papiers.json"),
+            data.join("notifications.json"),
+            data.join("index.db"),
+            data.join("fils"),
+            data.join("historique.jsonl"),
+            data.join("captures"),
+        ];
+        self.dossiers_interdits
+            .iter()
+            .map(|d| abs(d))
+            .chain(TOUJOURS_INTERDITS.iter().map(|d| abs(d)))
+            .chain(propres)
+            .collect()
     }
 
     /// Chemin interdit ? Comparé sous trois formes : tel quel, nettoyé (`.`, `..`, `//`) et
@@ -372,12 +441,19 @@ impl Regles {
                 return Some(format!("la commande « {c} » est interdite par les règles"));
             }
         }
-        let home = paths::home_dir().to_string_lossy().into_owned();
-        let expanded = cmd.replace("$HOME", &home).replace("~/", &format!("{home}/"));
+        let home = paths::home_dir().to_string_lossy().replace('\\', "/");
+        let expanded = cmd
+            .replace('\\', "/")
+            .replace("$HOME", &home)
+            .replace("$env:USERPROFILE", &home)
+            .replace("%USERPROFILE%", &home)
+            .replace("~/", &format!("{home}/"));
+        let exp_cmp = if cfg!(windows) { expanded.to_lowercase() } else { expanded };
         for (raw, f) in self.dossiers_interdits.iter().zip(self.forbidden_paths()) {
-            let fs = f.to_string_lossy();
+            let fs = f.to_string_lossy().replace('\\', "/");
             let base = fs.split('*').next().unwrap_or(&fs).trim_end_matches('/');
-            if !base.is_empty() && base != home && expanded.contains(base) {
+            let base_cmp = if cfg!(windows) { base.to_lowercase() } else { base.to_string() };
+            if !base_cmp.is_empty() && base_cmp != home.to_lowercase() && base != home && exp_cmp.contains(&base_cmp) {
                 return Some(format!("la commande touche {raw}, interdit par les règles"));
             }
         }
@@ -417,6 +493,13 @@ mod tests {
         assert!(r.command_refusal("git push origin main").is_some());
         assert!(r.command_refusal("ls -la").is_none());
         assert!(r.command_refusal("cat ~/.ssh/id_ed25519").is_some());
+        assert!(glob_prefix_canon(r"C:\Users\antsa\.ssh", r"\\?\C:\Users\Antsa\.SSH\id_ed25519", true));
+        assert!(glob_prefix_canon(
+            r"C:\Users\antsa\AppData\Roaming\Mozilla\Firefox\Profiles/*/logins.json",
+            r"C:\Users\Antsa\AppData\Roaming\Mozilla\Firefox\Profiles\abc.default\LOGINS.JSON",
+            true
+        ));
+        assert!(!glob_prefix_canon(r"C:\Users\antsa\.ssh", r"C:\Users\antsa\.ssh_public\note.txt", true));
     }
 
     #[test]

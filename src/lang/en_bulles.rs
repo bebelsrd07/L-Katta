@@ -1,6 +1,17 @@
 //! Traductions anglaises (bulles). Clé : le texte français exact du code (`t!("…")`).
 
 pub const T: &[(&str, &str)] = &[
+    ("Ctrl+Alt+K m'ouvre de n'importe quelle application, sans toucher la souris.", "Ctrl+Alt+K opens me from any application, without using the mouse."),
+    ("Glisse un fichier ou une image directement sur moi : je le lis et je te réponds.", "Drag a file or image directly onto me and I can read it and answer you."),
+    ("Win+V ouvre l'historique du presse-papiers de Windows ; moi, je garde aussi le mien (/presse).", "Win+V opens Windows clipboard history; I keep my own too (/presse)."),
+    ("Win+Tab affiche toutes tes fenêtres ouvertes et tes bureaux virtuels d'un coup d'œil.", "Win+Tab shows your open windows and virtual desktops at a glance."),
+    ("Win+Maj+S capture une zone précise de l'écran dans le presse-papiers.", "Win+Shift+S captures an area of the screen to the clipboard."),
+    ("Win+Z propose des dispositions propres pour ranger tes fenêtres côte à côte.", "Win+Z suggests layouts for arranging windows side by side."),
+    ("Win+L verrouille ta session d'un geste quand tu t'éloignes.", "Win+L locks your session when you step away."),
+    ("Win+. ouvre le sélecteur d'emoji et de caractères spéciaux partout.", "Win+. opens the emoji and special character picker anywhere."),
+    ("Win+E ouvre l'Explorateur de fichiers ; Ctrl+Maj+Échap ouvre le Gestionnaire des tâches.", "Win+E opens File Explorer; Ctrl+Shift+Escape opens Task Manager."),
+    ("Un clic droit sur moi ou sur mon icône près de l'horloge ouvre tous mes réglages.", "Right-click me or my icon near the clock to open my settings."),
+
     // À propos
     ("Un petit lémurien assistant pour ton bureau Linux.", "A little lemur assistant for your Linux desktop."),
     ("Conçu par", "Made by"),

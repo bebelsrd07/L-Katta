@@ -26,15 +26,10 @@
 //! — très en dessous du budget de 15 Mo. La fenêtre est déplacée pour suivre le maki plutôt que
 //! d'occuper tout l'écran, ce qui est aussi ce que font les backends Wayland et X11.
 //!
-//! ## Ce qui n'est pas câblé
-//!
-//! Les boutons d'action sous une bulle spontanée : `actions_for` vit dans `mascot/mod.rs` et
-//! dépend de ses outils (historique, fils, courriel). Tout le reste — la discussion, ses réglages,
-//! le clavier, le presse-papiers, les fichiers joints, l'historique des fils — passe par `chat` et
-//! `draw`, qui sont portables, et est branché ici.
 
 use std::cell::RefCell;
 use std::ffi::c_void;
+use std::os::windows::ffi::OsStringExt;
 use std::time::{Duration, Instant};
 
 use tiny_skia::{Pixmap, Transform};
@@ -69,6 +64,7 @@ unsafe extern "system" {
     fn TranslateMessage(m: *const MSG) -> i32;
     fn DispatchMessageW(m: *const MSG) -> isize;
     fn PostQuitMessage(code: i32);
+    fn PostMessageW(fenetre: isize, message: u32, w: usize, l: isize) -> i32;
     fn DestroyWindow(fenetre: isize) -> i32;
     fn SetTimer(fenetre: isize, id: usize, millisecondes: u32, rappel: usize) -> usize;
     fn KillTimer(fenetre: isize, id: usize) -> i32;
@@ -98,6 +94,22 @@ unsafe extern "system" {
     fn ReleaseCapture() -> i32;
     fn TrackMouseEvent(e: *mut TRACKMOUSEEVENT) -> i32;
     fn LoadCursorW(instance: isize, nom: *const u16) -> isize;
+    fn RegisterHotKey(fenetre: isize, id: i32, modifiers: u32, vk: u32) -> i32;
+    fn UnregisterHotKey(fenetre: isize, id: i32) -> i32;
+    fn DestroyIcon(icon: isize) -> i32;
+    fn RegisterWindowMessageW(name: *const u16) -> u32;
+    fn CreatePopupMenu() -> isize;
+    fn AppendMenuW(menu: isize, flags: u32, id: usize, text: *const u16) -> i32;
+    fn TrackPopupMenu(menu: isize, flags: u32, x: i32, y: i32, reserved: i32, window: isize, rect: *const c_void) -> u32;
+    fn DestroyMenu(menu: isize) -> i32;
+}
+
+#[link(name = "shell32")]
+unsafe extern "system" {
+    fn DragAcceptFiles(fenetre: isize, accepte: i32);
+    fn DragQueryFileW(drop: isize, index: u32, buffer: *mut u16, taille: u32) -> u32;
+    fn DragFinish(drop: isize);
+    fn Shell_NotifyIconW(message: u32, data: *mut NotifyIconData) -> i32;
 }
 
 #[link(name = "gdi32")]
@@ -112,6 +124,13 @@ unsafe extern "system" {
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn GetModuleHandleW(nom: *const u16) -> isize;
+}
+
+#[repr(C)]
+struct NotifyIconData {
+    size: u32, hwnd: isize, id: u32, flags: u32, callback: u32, icon: isize,
+    tip: [u16; 128], state: u32, state_mask: u32, info: [u16; 256], timeout: u32,
+    info_title: [u16; 64], info_flags: u32, guid: [u8; 16], balloon_icon: isize,
 }
 
 #[repr(C)]
@@ -218,12 +237,22 @@ const WS_EX_NOACTIVATE: u32 = 0x0800_0000;
 const WM_DESTROY: u32 = 0x0002;
 const WM_TIMER: u32 = 0x0113;
 const WM_MOUSEMOVE: u32 = 0x0200;
+const WM_MOUSEWHEEL: u32 = 0x020A;
+const WM_DISPLAYCHANGE: u32 = 0x007E;
+const WM_SETTINGCHANGE: u32 = 0x001A;
+const WM_DPICHANGED: u32 = 0x02E0;
 const WM_LBUTTONDOWN: u32 = 0x0201;
 const WM_LBUTTONUP: u32 = 0x0202;
 const WM_RBUTTONUP: u32 = 0x0205;
 const WM_MBUTTONUP: u32 = 0x0208;
 const WM_MOUSELEAVE: u32 = 0x02A3;
-const WM_KILLFOCUS: u32 = 0x0006;
+const WM_SETFOCUS: u32 = 0x0007;
+const WM_KILLFOCUS: u32 = 0x0008;
+const WM_APPLIQUER_CLAVIER: u32 = 0x8001;
+const WM_REGLER_RACCOURCI: u32 = 0x8002;
+const WM_HOTKEY: u32 = 0x0312;
+const WM_TRAY: u32 = 0x8003;
+const WM_DROPFILES: u32 = 0x0233;
 const WM_KEYDOWN: u32 = 0x0100;
 const WM_CHAR: u32 = 0x0102;
 
@@ -237,6 +266,7 @@ const SWP_NOACTIVATE: u32 = 0x0010;
 /// Touches virtuelles. Les lettres ont le code de leur majuscule ASCII.
 const VK_SHIFT: i32 = 0x10;
 const VK_CONTROL: i32 = 0x11;
+const VK_MENU: i32 = 0x12;
 const VK_BACK: usize = 0x08;
 const VK_RETURN: usize = 0x0D;
 const VK_ESCAPE: usize = 0x1B;
@@ -264,7 +294,7 @@ const LOGPIXELSX: i32 = 88;
 const SPI_GETWORKAREA: u32 = 0x0030;
 const DIB_RGB_COLORS: u32 = 0;
 const BI_RGB: u32 = 0;
-const ULW_ALPHA: u32 = 0x0000_0004;
+const ULW_ALPHA: u32 = 0x0000_0002;
 const AC_SRC_OVER: u8 = 0x00;
 const AC_SRC_ALPHA: u8 = 0x01;
 const TME_LEAVE: u32 = 0x0000_0002;
@@ -282,6 +312,8 @@ thread_local! {
     /// `thread_local` et non une variable globale : la boucle de messages et le rappel sont sur le
     /// même fil, donc il n'y a jamais deux accès simultanés, et aucun verrou à prendre.
     static ETAT: RefCell<Option<Etat>> = const { RefCell::new(None) };
+    static TRAY: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
+    static TASKBAR_CREATED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 /// Lance le maki et ne revient qu'à sa fermeture.
@@ -312,8 +344,10 @@ pub fn run(cfg: Config, rx: crate::os::canal::Recepteur<Msg>) -> Result<(), Stri
     let (dc, bit, bits) = dib(largeur, hauteur)?;
     let chat = Chat::new(cfg.clone());
 
+    let accueil_a = (!cfg.accueil).then(|| Instant::now() + Duration::from_secs(4));
     let etat = Etat {
         cfg,
+        accueil_a,
         chat,
         chat_layout: None,
         bulle_layout: None,
@@ -346,8 +380,13 @@ pub fn run(cfg: Config, rx: crate::os::canal::Recepteur<Msg>) -> Result<(), Stri
         traine: false,
         quiet: false,
         cache: false,
+        capture: false,
         en_attente: Vec::new(),
         etait_occupe: false,
+        absent: false,
+        cout_image: 0.004,
+        intervalle: MILLIS_PAR_IMAGE,
+        dernier_glisser: Instant::now(),
         derniere_parole: None,
         place: false,
         derniere: Instant::now(),
@@ -417,6 +456,14 @@ pub fn run(cfg: Config, rx: crate::os::canal::Recepteur<Msg>) -> Result<(), Stri
         }
     });
 
+    // Enregistre le raccourci après création et accepte les fichiers déposés sur la fenêtre.
+    unsafe { DragAcceptFiles(fenetre, 1) };
+    let icon = crate::os::win::icone_depuis_pixmap(&crate::install::icon(32));
+    TRAY.with(|t| t.set(icon));
+    TASKBAR_CREATED.with(|t| t.set(unsafe { RegisterWindowMessageW(large("TaskbarCreated").as_ptr()) }));
+    tray_add(fenetre, icon);
+    avec_etat(|a| regler_raccourci(fenetre, &a.cfg.maki.raccourci));
+
     // SAFETY : minuteur de fenêtre, sans rappel : c'est WM_TIMER qui passera par `procedure`.
     unsafe { SetTimer(fenetre, ID_MINUTEUR, MILLIS_PAR_IMAGE, 0) };
 
@@ -442,17 +489,20 @@ pub fn run(cfg: Config, rx: crate::os::canal::Recepteur<Msg>) -> Result<(), Stri
         }
     }
 
+    tray_delete(fenetre);
+    TRAY.with(|t| { let icon = t.replace(0); if icon != 0 { unsafe { DestroyIcon(icon) }; } });
     // SAFETY : le minuteur, le bitmap et le DC ont été créés ici, et la fenêtre va disparaître.
     unsafe {
         KillTimer(fenetre, ID_MINUTEUR);
+        UnregisterHotKey(fenetre, 1);
     }
     ETAT.with(|e| {
         if let Some(a) = e.borrow_mut().take() {
             // SAFETY : `a.dc`, `a.bit` viennent de `CreateCompatibleDC` et `CreateDIBSection`,
             // supprimés une seule fois, ici, après la fin de la boucle de messages.
             unsafe {
-                DeleteObject(a.bit);
                 DeleteDC(a.dc);
+                DeleteObject(a.bit);
             }
         }
     });
@@ -462,9 +512,14 @@ pub fn run(cfg: Config, rx: crate::os::canal::Recepteur<Msg>) -> Result<(), Stri
 /// Le rappel de fenêtre. Tout y est court : le travail est dans `Etat`, emprunté le temps d'un
 /// appel, jamais gardé.
 unsafe extern "system" fn procedure(fenetre: isize, message: u32, w: usize, l: isize) -> isize {
+    if message != 0 && TASKBAR_CREATED.with(|t| t.get() == message) {
+        TRAY.with(|t| tray_add(fenetre, t.get()));
+        return 0;
+    }
     match message {
         WM_TIMER => {
             avec_etat(|a| a.tic());
+            for (title, text) in crate::os::win::prendre_notifications() { tray_notification(fenetre, &title, &text); }
             0
         }
         WM_MOUSEMOVE => {
@@ -477,6 +532,32 @@ unsafe extern "system" fn procedure(fenetre: isize, message: u32, w: usize, l: i
                         a.appui = Some((depart, true));
                         a.prendre();
                     }
+                }
+            });
+            0
+        }
+        WM_DISPLAYCHANGE | WM_SETTINGCHANGE | WM_DPICHANGED => {
+            avec_etat(|a| a.actualiser_moniteur());
+            0
+        }
+        WM_MOUSEWHEEL => {
+            let delta = ((w >> 16) as u16 as i16) as i32;
+            avec_etat(|a| {
+                let Some(p) = a.pointeur.map(|p| (p.0 - a.origin.0, p.1 - a.origin.1)) else { return };
+                let Some(lay) = a.chat_layout.as_ref() else { return };
+                if lay.picker.is_some_and(|r| hit(r, p)) {
+                    if let Some(p) = &mut a.chat.picker {
+                        if delta < 0 { p.scroll += 2; } else if delta > 0 { p.scroll = p.scroll.saturating_sub(2); }
+                    }
+                    if let Some(h) = &mut a.chat.histo {
+                        if delta < 0 { h.scroll = (h.scroll + 2).min(500); } else if delta > 0 { h.scroll = h.scroll.saturating_sub(2); }
+                    }
+                    if let Some(panel) = &mut a.chat.panneau {
+                        let max = (lay.panel_content - lay.panel_view).max(0.0);
+                        panel.scroll = (panel.scroll + if delta < 0 { 40.0 } else if delta > 0 { -40.0 } else { 0.0 }).clamp(0.0, max);
+                    }
+                } else if hit(lay.rect, p) {
+                    if delta > 0 { a.chat.scroll += 2; } else if delta < 0 { a.chat.scroll = a.chat.scroll.saturating_sub(2); }
                 }
             });
             0
@@ -535,12 +616,79 @@ unsafe extern "system" fn procedure(fenetre: isize, message: u32, w: usize, l: i
             });
             0
         }
+        WM_TRAY => {
+            match l as u32 & 0xffff {
+                WM_LBUTTONUP => avec_etat(|a| a.basculer_chat()),
+                WM_RBUTTONUP => {
+                    let choix = tray_menu(fenetre);
+                    avec_etat(|a| match choix {
+                        1 => a.basculer_chat(),
+                        2 => { if !a.chat.open { a.basculer_chat(); } a.chat.open_settings(0); },
+                        3 => a.message(Msg::Quiet(None)),
+                        4 => a.message(Msg::Hide(None)),
+                        5 => a.message(Msg::Quit),
+                        _ => {},
+                    });
+                }
+                _ => {}
+            }
+            0
+        }
+        WM_HOTKEY if w == 1 => {
+            avec_etat(|a| a.basculer_chat());
+            0
+        }
+        WM_REGLER_RACCOURCI => {
+            let raccourci = ETAT.with(|e| e.try_borrow().ok().and_then(|a| a.as_ref().map(|a| a.cfg.maki.raccourci.clone())));
+            if let Some(raccourci) = raccourci { regler_raccourci(fenetre, &raccourci); }
+            0
+        }
+        WM_DROPFILES => {
+            let drop = w as isize;
+            let mut fichiers = Vec::new();
+            unsafe {
+                let nombre = DragQueryFileW(drop, u32::MAX, std::ptr::null_mut(), 0).min(256);
+                for i in 0..nombre {
+                    let len = DragQueryFileW(drop, i, std::ptr::null_mut(), 0);
+                    if len == 0 || len > 32767 { continue; }
+                    let mut buf = vec![0u16; len as usize + 1];
+                    let n = DragQueryFileW(drop, i, buf.as_mut_ptr(), buf.len() as u32);
+                    if n > 0 { fichiers.push(std::path::PathBuf::from(std::ffi::OsString::from_wide(&buf[..n as usize]))); }
+                }
+                DragFinish(drop);
+            }
+            if !fichiers.is_empty() {
+                avec_etat(|a| {
+                    if !a.chat.open { a.basculer_chat(); }
+                    a.chat.ajouter_pieces(fichiers);
+                });
+            }
+            0
+        }
+        WM_APPLIQUER_CLAVIER => {
+            // Ne pas tenir un emprunt de ETAT : ces appels peuvent envoyer WM_SETFOCUS.
+            unsafe {
+                let ex = GetWindowLongPtrW(fenetre, GWL_EXSTYLE);
+                let nouveau = if w != 0 { ex & !(WS_EX_NOACTIVATE as isize) } else { ex | WS_EX_NOACTIVATE as isize };
+                SetWindowLongPtrW(fenetre, GWL_EXSTYLE, nouveau);
+                if w != 0 {
+                    SetForegroundWindow(fenetre);
+                    SetFocus(fenetre);
+                }
+            }
+            0
+        }
+        WM_SETFOCUS => {
+            avec_etat(|a| { a.a_le_clavier = true; a.chat.retour_attendu = false; });
+            0
+        }
         WM_KILLFOCUS => {
             // Le clavier part ailleurs : la discussion se referme. C'est le comportement de la
             // version Linux, où la bulle ouverte par un clic « se referme quand on clique
             // ailleurs » — ici l'ailleurs se voit directement, par la perte du focus.
             avec_etat(|a| {
-                if a.chat.open {
+                a.a_le_clavier = false;
+                if a.chat.fermable() {
                     a.basculer_chat();
                 }
             });
@@ -567,14 +715,17 @@ unsafe extern "system" fn procedure(fenetre: isize, message: u32, w: usize, l: i
 /// par Windows pendant un traitement, et une seconde `borrow_mut` paniquerait.
 fn avec_etat(f: impl FnOnce(&mut Etat)) {
     ETAT.with(|e| {
-        if let Some(a) = &mut *e.borrow_mut() {
-            f(a);
+        if let Ok(mut etat) = e.try_borrow_mut() {
+            if let Some(a) = &mut *etat {
+                f(a);
+            }
         }
     });
 }
 
 struct Etat {
     cfg: Config,
+    accueil_a: Option<Instant>,
     rx: crate::os::canal::Recepteur<Msg>,
     maki: Maki,
     pixmap: Pixmap,
@@ -626,6 +777,7 @@ struct Etat {
     traine: bool,
     quiet: bool,
     cache: bool,
+    capture: bool,
     /// La fenêtre a déjà été placée une fois : avant cela, tout contenu tient par définition.
     place: bool,
     /// Messages gardés pendant une période occupée : ils s'affichent à la fin, en une seule bulle,
@@ -633,6 +785,10 @@ struct Etat {
     en_attente: Vec<Message>,
     /// Il était occupé à l'image précédente : la transition libère ce qui attendait.
     etait_occupe: bool,
+    absent: bool,
+    cout_image: f32,
+    intervalle: u32,
+    dernier_glisser: Instant,
     /// Dernière parole spontanée, pour respecter l'intervalle `parole_min`.
     derniere_parole: Option<Instant>,
     derniere: Instant,
@@ -646,15 +802,34 @@ impl Etat {
         self.derniere = maintenant;
 
         self.lire_le_demon();
+        let absent = crate::os::win::inactif_ms() >= 10 * 60 * 1000;
+        if self.absent && !absent && !self.occupe() {
+            self.liberer_attente(t!("Pendant ton absence"));
+        }
+        self.absent = absent;
         self.sonder();
+        if self.accueil_a.is_some_and(|a| Instant::now() >= a) && !self.occupe() && !self.cache {
+            self.accueil_a = None;
+            self.chat.open_accueil();
+            self.prendre_clavier(true);
+        }
         let ctx = self.ctx();
         self.maki.step(dt, ctx);
         // La taille et la place dépendent de ce qu'il faut dessiner, donc de la pose : elles
         // viennent après le pas d'animation, comme dans la version Linux.
+        let debut = Instant::now();
         self.ajuster();
         self.placer();
         self.peindre();
         self.presenter();
+        let cout = debut.elapsed().as_secs_f32().min(0.1);
+        self.cout_image = self.cout_image * 0.9 + cout * 0.1;
+        let voulu: u32 = if self.cache { 500 } else if self.traine { 16 } else if self.maki.busy() { 33 } else if self.chat.open { 120 } else { 90 };
+        let intervalle = voulu.max((self.cout_image * 4000.0).ceil() as u32).clamp(16, 500);
+        if intervalle != self.intervalle {
+            self.intervalle = intervalle;
+            unsafe { SetTimer(self.fenetre, ID_MINUTEUR, intervalle, 0) };
+        }
     }
 
     /// Vide le canal. Tout ce qui arrive d'un coup est traité : le démon peut envoyer plusieurs
@@ -674,13 +849,13 @@ impl Etat {
             // Une remarque spontanée est soumise à la discrétion et à l'intervalle entre paroles.
             Msg::Hint(t) => self.spontane(Message::new(Kind::Info, "", t)),
             // Occupé : astuces, nouvelles et mails attendent la fin ; les rappels passent.
-            Msg::Bubble(m, _) if self.occupe() && matches!(m.kind, Kind::Mail | Kind::News | Kind::Tip | Kind::Alert) => {
+            Msg::Bubble(m, _) if (self.occupe() || self.absent) && matches!(m.kind, Kind::Mail | Kind::News | Kind::Tip | Kind::Alert) => {
                 self.mettre_de_cote(m)
             }
             Msg::Bubble(m, true) => self.montrer(m),
             Msg::Bubble(m, false) => self.spontane(m),
             // Une discussion ouverte ou une réponse en cours : pas d'acrobatie par-dessus.
-            Msg::Flip | Msg::Tree | Msg::Teleport | Msg::Climb if self.fige() => {}
+            Msg::Flip | Msg::Tree | Msg::Teleport | Msg::Climb | Msg::Screen if self.fige() => {}
             Msg::Flip => self.maki.flip(),
             Msg::Wave => self.maki.wave(),
             Msg::Tree => self.maki.tree_show(&ctx),
@@ -709,7 +884,51 @@ impl Etat {
             // `Screen` et `Desktop` viennent du passage d'un écran ou d'un bureau à l'autre, et un
             // seul moniteur est pris en compte ; `Capture` sert aux essais X11.
             Msg::Chat | Msg::Raccourci => self.basculer_chat(),
-            Msg::ActiveOutput(_) | Msg::Screen | Msg::Desktop(_) | Msg::Capture(_) => {}
+            Msg::Capture(v) => self.capture = v,
+            Msg::ActiveOutput(nom) if self.cfg.maki.suivre && self.cfg.maki.ecrans_multiples && !self.fige() && !self.traine => self.aller_moniteur(&nom),
+            Msg::Screen if self.cfg.maki.ecrans_multiples => {
+                let liste = crate::os::win::moniteurs();
+                if liste.len() > 1 {
+                    let courant = self.nom_moniteur();
+                    let i = liste.iter().position(|m| Some(&m.nom) == courant.as_ref()).unwrap_or(0);
+                    self.aller_moniteur(&liste[(i + 1) % liste.len()].nom);
+                }
+            }
+            Msg::ActiveOutput(_) | Msg::Screen | Msg::Desktop(_) => {}
+        }
+    }
+
+    fn nom_moniteur(&self) -> Option<String> {
+        crate::os::win::moniteur_du_point(self.travail.left + self.maki.pos.0 as i32, self.travail.top + self.maki.pos.1 as i32)
+    }
+
+    fn actualiser_moniteur(&mut self) {
+        let nom = self.nom_moniteur();
+        let liste = crate::os::win::moniteurs();
+        if let Some(m) = liste.iter().find(|m| Some(&m.nom) == nom.as_ref()).or_else(|| liste.first()) {
+            self.appliquer_moniteur(m, false);
+        }
+        draw::set_theme(&self.cfg.maki.theme);
+    }
+
+    fn aller_moniteur(&mut self, nom: &str) {
+        if self.nom_moniteur().as_deref() == Some(nom) { return; }
+        if let Some(m) = crate::os::win::moniteurs().iter().find(|m| m.nom == nom) {
+            self.appliquer_moniteur(m, true);
+        }
+    }
+
+    fn appliquer_moniteur(&mut self, m: &crate::os::win::Moniteur, deplacement: bool) {
+        let r = m.travail;
+        self.travail = RECT { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+        self.monde = ((r.right - r.left).max(64) as f32, (r.bottom - r.top).max(64) as f32);
+        self.echelle = m.echelle;
+        let espece = Espece::parse(&self.cfg.maki.espece).unwrap_or(Espece::Catta);
+        self.s = (self.cfg.maki.taille * espece.pal().size).clamp(0.4, 3.5) * self.echelle;
+        self.place = false;
+        if deplacement {
+            let ctx = self.ctx();
+            self.maki.teleport(&ctx);
         }
     }
 
@@ -723,7 +942,7 @@ impl Etat {
         Ctx {
             w: self.monde.0,
             h: self.monde.1,
-            night: nuit,
+            night: nuit || self.absent,
             day: (6..18).contains(&heure),
             quiet: self.quiet || self.occupe(),
             acrobatics: self.cfg.maki.acrobaties,
@@ -910,10 +1129,9 @@ impl Etat {
             ));
         } else if let Some(b) = &self.maki.bubble {
             let tete = self.tete();
-            // Les boutons d'action ne sont pas câblés : `actions_for` vit dans `mascot/mod.rs` et
-            // dépend de ses outils. La croix et le texte qui se révèle, eux, le sont.
+            let actions = actions_for(&b.msg);
             self.bulle_layout = Some(draw::fancy_bubble(
-                &mut self.pixmap, &self.texte, &self.gras, b, &[], tete.0 - sx, tete.1 - sy, u,
+                &mut self.pixmap, &self.texte, &self.gras, b, &actions, tete.0 - sx, tete.1 - sy, u,
             ));
         }
     }
@@ -979,12 +1197,16 @@ impl Etat {
             unsafe { TrackMouseEvent(&mut e) };
         }
         if self.traine {
-            self.maki.drag_to(monde, MILLIS_PAR_IMAGE as f32 / 1000.0);
+            let maintenant = Instant::now();
+            let dt = maintenant.duration_since(self.dernier_glisser).as_secs_f32().clamp(0.001, 0.1);
+            self.dernier_glisser = maintenant;
+            self.maki.drag_to(monde, dt);
         }
     }
 
     fn prendre(&mut self) {
         if let Some(p) = self.pointeur {
+            self.dernier_glisser = Instant::now();
             self.maki.grab(p);
             self.traine = true;
         }
@@ -1053,7 +1275,7 @@ impl Etat {
     /// cours garde le maki visible : on ne fait pas disparaître quelqu'un à qui l'on parle.
     fn invisible(&self) -> bool {
         let plein_ecran = self.devant.as_ref().is_some_and(|f| f.plein_ecran);
-        self.cache || (plein_ecran && !self.fige())
+        self.capture || self.cache || (plein_ecran && !self.fige())
     }
 
     /// La boîte de la bulle de discussion, dans le monde : `(x, y, au-dessus, largeur, hauteur)`.
@@ -1194,17 +1416,8 @@ impl Etat {
             return;
         }
         self.a_le_clavier = veut;
-        // SAFETY : lecture puis écriture du style étendu de notre fenêtre, créée ici.
-        unsafe {
-            let ex = GetWindowLongPtrW(self.fenetre, GWL_EXSTYLE);
-            let nouveau = if veut { ex & !(WS_EX_NOACTIVATE as isize) } else { ex | WS_EX_NOACTIVATE as isize };
-            SetWindowLongPtrW(self.fenetre, GWL_EXSTYLE, nouveau);
-            if veut {
-                // Sans activation aucune touche n'arrive : c'est tout l'objet du basculement.
-                SetForegroundWindow(self.fenetre);
-                SetFocus(self.fenetre);
-            }
-        }
+        // Appliquer après la fin du rappel courant : SetFocus envoie des messages synchrones.
+        unsafe { PostMessageW(self.fenetre, WM_APPLIQUER_CLAVIER, usize::from(veut), 0) };
     }
 
     /// Un clic, dans les coordonnées de la surface.
@@ -1301,12 +1514,45 @@ impl Etat {
     fn clic_bulle(&mut self, lay: &BubbleLayout, p: (f32, f32)) {
         if hit(lay.close, p) {
             self.maki.bubble = None;
+        } else if let Some(i) = lay.actions.iter().position(|r| hit(*r, p)) {
+            if let Some(label) = self.maki.bubble.as_ref().and_then(|b| actions_for(&b.msg).get(i).copied()) {
+                self.action_bulle(label);
+            }
         } else if let Some(b) = &mut self.maki.bubble {
             if b.revealed() < b.full() {
                 b.age = 60.0;
             } else {
                 self.maki.bubble = None;
             }
+        }
+    }
+
+    fn action_bulle(&mut self, label: &str) {
+        let Some(b) = self.maki.bubble.take() else { return };
+        match label {
+            "Discuter" | "Lire en entier" => { if !self.chat.open { self.basculer_chat(); } }
+            "Une astuce" | "Autre astuce" => self.montrer(crate::conseils::astuce()),
+            "Dans 10 min" => {
+                let when = chrono::Local::now() + chrono::Duration::minutes(10);
+                let _ = crate::reminders::add(when, &b.msg.text);
+                self.maki.say(t!("D'accord, je te le redis dans 10 minutes."), 3.5);
+            }
+            "Qu'en faire ?" => {
+                if !self.chat.open { self.basculer_chat(); }
+                self.chat.input.set(t!("{} : {}. Explique-moi simplement et dis-moi quoi faire.", b.msg.title, b.msg.text));
+                self.chat.submit();
+            }
+            "Résumer" => {
+                if !self.chat.open { self.basculer_chat(); }
+                self.chat.input.set(t!("Résume mes nouveaux mails non lus en quelques lignes, du plus important au moins important."));
+                self.chat.submit();
+            }
+            "Mettre à jour" => {
+                let _ = crate::hote::commande(crate::paths::self_exe()).arg("maj").spawn();
+                self.maki.say(t!("Je télécharge la nouvelle version…"), 6.0);
+            }
+            "Lire" => { if let Some(lien) = &b.msg.link { self.ouvrir_adresse(lien); } }
+            _ => self.maki.set_expr(super::behavior::Expr::Happy, 1.5),
         }
     }
 
@@ -1331,11 +1577,11 @@ impl Etat {
         if !self.chat.open {
             return;
         }
-        let (ctrl, shift) = (touche_enfoncee(VK_CONTROL), touche_enfoncee(VK_SHIFT));
+        let (ctrl, shift) = (touche_enfoncee(VK_CONTROL) && !touche_enfoncee(VK_MENU), touche_enfoncee(VK_SHIFT));
         let champ = self.chat.has_field_focus();
         match vk {
             VK_ESCAPE => {
-                if champ { self.chat.field_escape() } else { self.basculer_chat() }
+                if champ { self.chat.field_escape() } else if self.chat.busy && !crate::controle::arrete() { self.chat.arreter() } else { self.basculer_chat() }
             }
             VK_RETURN => {
                 if champ {
@@ -1437,7 +1683,7 @@ impl Etat {
         // Fin d'une visioconférence, d'une présentation ou d'un plein écran : ce qui avait été mis
         // de côté s'affiche maintenant, en une seule bulle.
         let occupe = self.occupe();
-        if self.etait_occupe && !occupe {
+        if self.etait_occupe && !occupe && !self.absent {
             self.liberer_attente(t!("Pendant que tu étais occupé·e"));
         }
         self.etait_occupe = occupe;
@@ -1472,7 +1718,7 @@ impl Etat {
     /// autant, puisque l'occupation, elle, est détectée et met de côté.
     fn spontane(&mut self, m: Message) {
         let ecart = Duration::from_secs(self.cfg.maki.parole_min as u64 * 60);
-        if self.occupe() {
+        if self.occupe() || self.absent {
             self.mettre_de_cote(m);
             return;
         }
@@ -1517,6 +1763,7 @@ impl Etat {
         let change = cfg.maki.espece != self.cfg.maki.espece || (cfg.maki.taille - self.cfg.maki.taille).abs() > 0.01;
         self.chat.reload(cfg.clone());
         self.cfg = cfg;
+        unsafe { PostMessageW(self.fenetre, WM_REGLER_RACCOURCI, 0, 0) };
         draw::set_theme(&self.cfg.maki.theme);
         let espece = Espece::parse(&self.cfg.maki.espece).unwrap_or(Espece::Catta);
         draw::set_species(espece);
@@ -1529,6 +1776,108 @@ impl Etat {
             let ctx = self.ctx();
             self.maki.say(espece.presentation(), 3.0);
             self.maki.teleport(&ctx);
+        }
+    }
+}
+
+fn actions_for(m: &Message) -> Vec<&'static str> {
+    match m.kind {
+        Kind::Hello => vec!["Discuter", "Une astuce"],
+        Kind::Tip => vec!["Autre astuce", "Merci"],
+        Kind::Reminder => vec!["C'est noté", "Dans 10 min"],
+        Kind::Alert => vec!["Qu'en faire ?", "Plus tard"],
+        Kind::News if m.link.as_deref().is_some_and(|l| l.starts_with("maj:")) => vec!["Mettre à jour", "Plus tard"],
+        Kind::News if m.link.is_some() => vec!["Lire", "OK"],
+        Kind::Answer => vec!["Lire en entier", "OK"],
+        Kind::Mail => vec!["Résumer", "Plus tard"],
+        _ => vec![],
+    }
+}
+
+fn tray_data(fenetre: isize) -> NotifyIconData {
+    let mut data: NotifyIconData = unsafe { std::mem::zeroed() };
+    data.size = std::mem::size_of::<NotifyIconData>() as u32;
+    data.hwnd = fenetre;
+    data.id = 1;
+    data
+}
+
+fn copier_large(dst: &mut [u16], text: &str) {
+    let n = dst.len().saturating_sub(1);
+    for (d, c) in dst.iter_mut().take(n).zip(text.encode_utf16()) { *d = c; }
+}
+
+fn tray_add(fenetre: isize, icon: isize) {
+    if icon == 0 { return; }
+    let mut data = tray_data(fenetre);
+    data.flags = 0x01 | 0x02 | 0x04;
+    data.callback = WM_TRAY;
+    data.icon = icon;
+    copier_large(&mut data.tip, "L Katta");
+    unsafe { Shell_NotifyIconW(0, &mut data) };
+}
+
+fn tray_delete(fenetre: isize) {
+    let mut data = tray_data(fenetre);
+    unsafe { Shell_NotifyIconW(2, &mut data) };
+}
+
+fn tray_notification(fenetre: isize, title: &str, text: &str) {
+    let mut data = tray_data(fenetre);
+    data.flags = 0x10;
+    data.info_flags = 1;
+    copier_large(&mut data.info_title, title);
+    copier_large(&mut data.info, text);
+    unsafe { Shell_NotifyIconW(1, &mut data) };
+}
+
+fn tray_menu(fenetre: isize) -> u32 {
+    unsafe {
+        let menu = CreatePopupMenu();
+        if menu == 0 { return 0; }
+        for (id, label) in [(1, t!("Discuter")), (2, t!("Réglages")), (3, t!("Discret")), (4, t!("Cacher")), (5, t!("Quitter"))] {
+            AppendMenuW(menu, 0, id, large(label).as_ptr());
+        }
+        let mut p = POINT { x: 0, y: 0 };
+        GetCursorPos(&mut p);
+        SetForegroundWindow(fenetre);
+        let choix = TrackPopupMenu(menu, 0x0100 | 0x0002, p.x, p.y, 0, fenetre, std::ptr::null());
+        DestroyMenu(menu);
+        choix
+    }
+}
+
+/// Raccourcis globaux : une seule touche et les modificateurs reconnus par Windows.
+fn analyser_raccourci(s: &str) -> Option<(u32, u32)> {
+    let mut mods = 0x4000; // MOD_NOREPEAT
+    let mut touche = None;
+    for partie in s.split('+').map(str::trim) {
+        match partie.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => mods |= 2,
+            "alt" => mods |= 1,
+            "shift" | "maj" => mods |= 4,
+            "win" | "meta" | "super" => mods |= 8,
+            autre => {
+                if touche.is_some() { return None; }
+                let vk = if autre.len() == 1 && autre.as_bytes()[0].is_ascii_alphanumeric() {
+                    autre.as_bytes()[0].to_ascii_uppercase() as u32
+                } else if let Some(n) = autre.strip_prefix('f').and_then(|n| n.parse::<u32>().ok()).filter(|n| (1..=24).contains(n)) {
+                    0x6f + n
+                } else { return None };
+                touche = Some(vk);
+            }
+        }
+    }
+    touche.filter(|_| mods & 0xf != 0).map(|vk| (mods, vk))
+}
+
+fn regler_raccourci(fenetre: isize, s: &str) {
+    unsafe {
+        UnregisterHotKey(fenetre, 1);
+        if let Some((mods, vk)) = analyser_raccourci(s) {
+            if RegisterHotKey(fenetre, 1, mods, vk) == 0 {
+                eprintln!("Raccourci global indisponible : {s}");
+            }
         }
     }
 }
@@ -1635,6 +1984,21 @@ fn large(s: &str) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raccourcis_win32() {
+        assert_eq!(analyser_raccourci("Ctrl+Alt+K"), Some((0x4003, 0x4b)));
+        assert_eq!(analyser_raccourci("Win+F12"), Some((0x4008, 0x7b)));
+        assert_eq!(analyser_raccourci("K"), None);
+        assert_eq!(analyser_raccourci("Ctrl+A+B"), None);
+    }
+
+    #[test]
+    fn win32_alpha_and_focus_constants() {
+        assert_eq!(ULW_ALPHA, 2);
+        assert_eq!(WM_SETFOCUS, 7);
+        assert_eq!(WM_KILLFOCUS, 8);
+    }
 
     #[test]
     fn the_work_area_is_never_empty_or_inverted() {

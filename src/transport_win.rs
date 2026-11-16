@@ -64,6 +64,7 @@ unsafe extern "system" {
         modele: isize,
     ) -> isize;
     fn ConnectNamedPipe(tube: isize, chevauche: *mut c_void) -> i32;
+    fn DisconnectNamedPipe(tube: isize) -> i32;
     fn FlushFileBuffers(h: isize) -> i32;
     fn CloseHandle(h: isize) -> i32;
     fn WaitNamedPipeW(nom: *const u16, delai: u32) -> i32;
@@ -84,8 +85,9 @@ unsafe extern "system" {
 
 ///Tube en accès lecture-écriture.
 const ACCES_TUBE: u32 = 0x0000_0003; // PIPE_ACCESS_DUPLEX
-/// Octets, lecture en octets, attente bloquante : le protocole est textuel, ligne par ligne.
-const MODE_TUBE: u32 = 0x0000_0000; // PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT
+/// Octets, lecture en octets, attente bloquante, et refus par le noyau de tout client distant
+/// (SMB) : le tube n'est joignable que depuis cette machine.
+const MODE_TUBE: u32 = 0x0000_0008; // PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS
 /// `PIPE_UNLIMITED_INSTANCES`. Le fil serveur ferme chaque instance avant d'en créer une autre,
 /// donc il n'y en a jamais qu'une en pratique — mais après `CloseHandle` le nom peut traîner un
 /// instant, et une limite à 1 ferait alors échouer la création suivante sans raison.
@@ -213,18 +215,35 @@ impl Sid {
 /// Écoute le tube et lance un fil pour cela. `repondre` transforme une ligne reçue en la ligne
 /// à renvoyer, terminaison comprise.
 pub fn ecouter(repondre: impl Fn(&str) -> String + Send + 'static) -> io::Result<()> {
-    let nom = large(&nom_du_tube());
+    ecouter_sur(&nom_du_tube(), repondre)
+}
+
+fn ecouter_sur(chemin: &str, repondre: impl Fn(&str) -> String + Send + 'static) -> io::Result<()> {
+    let nom = large(chemin);
     let moi = match utilisateur_courant() {
         Some(s) => s,
         // Sans SID de référence on ne peut reconnaître personne : mieux vaut ne pas écouter du
         // tout que d'accepter n'importe quel processus de la session.
         None => return Err(io::Error::other("le SID de l'utilisateur courant est illisible")),
     };
+    // Première instance créée avant de rendre la main : dès le retour d'`ecouter`, le tube existe
+    // et un client immédiat ne tombe jamais entre deux fils.
+    // SAFETY : création d'une instance de tube ; INVALID_HANDLE_VALUE en cas d'échec.
+    let premier = unsafe {
+        CreateNamedPipeW(nom.as_ptr(), ACCES_TUBE, MODE_TUBE, INSTANCES, TAILLE_MAX as u32, TAILLE_MAX as u32, 0, ptr::null_mut())
+    };
+    if premier == INVALIDE {
+        return Err(io::Error::last_os_error());
+    }
+    let repondre = std::sync::Arc::new(std::sync::Mutex::new(repondre));
     std::thread::spawn(move || {
+        let mut prochain = Some(premier);
         loop {
-            // SAFETY : création d'une instance de tube ; INVALID_HANDLE_VALUE en cas d'échec.
-            let tube = unsafe {
-                CreateNamedPipeW(nom.as_ptr(), ACCES_TUBE, MODE_TUBE, INSTANCES, TAILLE_MAX as u32, TAILLE_MAX as u32, 0, ptr::null_mut())
+            let tube = match prochain.take() {
+                Some(t) => t,
+                None => unsafe {
+                    CreateNamedPipeW(nom.as_ptr(), ACCES_TUBE, MODE_TUBE, INSTANCES, TAILLE_MAX as u32, TAILLE_MAX as u32, 0, ptr::null_mut())
+                },
             };
             if tube == INVALIDE {
                 // Plus de ressources, nom refusé : inutile d'insister en boucle serrée.
@@ -241,10 +260,14 @@ pub fn ecouter(repondre: impl Fn(&str) -> String + Send + 'static) -> io::Result
                 }
             }
             if !client_autorise(tube, &moi) {
+                // SAFETY : coupe la connexion avant de fermer la poignée.
+                unsafe { DisconnectNamedPipe(tube) };
                 fermer(tube);
                 continue;
             }
-            servir(tube, &repondre);
+            // Un fil court par client : un client lent ne fige jamais les commandes suivantes.
+            let cb = std::sync::Arc::clone(&repondre);
+            std::thread::spawn(move || servir(tube, &cb));
         }
     });
     Ok(())
@@ -265,22 +288,35 @@ fn client_autorise(tube: isize, moi: &Sid) -> bool {
 }
 
 /// Lit une commande, écrit la réponse, puis ferme. Une instance de tube ne sert qu'une fois.
-fn servir(tube: isize, repondre: &impl Fn(&str) -> String) {
+fn servir(tube: isize, repondre: &std::sync::Mutex<impl Fn(&str) -> String>) {
     // SAFETY : la poignée vient de CreateNamedPipeW et n'est possédée par rien d'autre ; le
     // `File` en prend la propriété, donc sa fermeture est la seule.
     let mut f = unsafe { std::fs::File::from_raw_handle(tube as *mut c_void) };
     let mut ligne = String::new();
     // `Take<&File>` ne sait que lire des octets : `read_line` vient de `BufRead`, donc il faut
     // l'envelopper. La borne de 64 Ko reste appliquée avant le tampon, comme sous Linux.
-    let _ = BufReader::new((&f).take(TAILLE_MAX as u64)).read_line(&mut ligne);
-    let _ = f.write_all(repondre(&ligne).as_bytes());
-    let _ = f.flush();
-    // Reprendre la poignée pour la vider puis la fermer nous-mêmes : `FlushFileBuffers` attend
-    // que le client ait tout reçu, et fermer sans ça peut couper la réponse en vol.
+    let lu = BufReader::new((&f).take(TAILLE_MAX as u64)).read_line(&mut ligne).unwrap_or(0);
+    // Une sonde `present()` referme sans rien envoyer : aucune commande à traiter ni à répondre.
+    if lu > 0 && !ligne.trim().is_empty() {
+        if let Ok(cb) = repondre.lock() {
+            let rep = cb(&ligne);
+            drop(cb);
+            let _ = f.write_all(rep.as_bytes());
+            let _ = f.flush();
+            let h = f.into_raw_handle() as isize;
+            // SAFETY : poignée valide, vidée puis déconnectée et fermée une seule fois.
+            unsafe {
+                FlushFileBuffers(h);
+                DisconnectNamedPipe(h);
+                CloseHandle(h);
+            }
+            return;
+        }
+    }
     let h = f.into_raw_handle() as isize;
-    // SAFETY : poignée valide, encore la nôtre, vidée puis fermée une seule fois.
+    // SAFETY : poignée valide, déconnectée et fermée une seule fois.
     unsafe {
-        FlushFileBuffers(h);
+        DisconnectNamedPipe(h);
         CloseHandle(h);
     }
 }
@@ -292,7 +328,11 @@ fn fermer(tube: isize) {
 
 /// Envoie une commande au démon et attend la réponse. Erreur si le démon ne tourne pas.
 pub fn envoyer(ligne: &str) -> io::Result<String> {
-    let nom = large(&nom_du_tube());
+    envoyer_sur(&nom_du_tube(), ligne)
+}
+
+fn envoyer_sur(chemin: &str, ligne: &str) -> io::Result<String> {
+    let nom = large(chemin);
     let h = ouvrir(&nom)?;
     // SAFETY : poignée venant de CreateFileW, non possédée ailleurs ; le `File` la prend.
     let mut f = unsafe { std::fs::File::from_raw_handle(h as *mut c_void) };
@@ -347,7 +387,11 @@ fn ouvrir(nom: &[u16]) -> io::Result<isize> {
 
 /// Le démon est-il là ? On essaie de se connecter, voilà tout.
 pub fn present() -> bool {
-    match ouvrir(&large(&nom_du_tube())) {
+    present_sur(&nom_du_tube())
+}
+
+fn present_sur(chemin: &str) -> bool {
+    match ouvrir(&large(chemin)) {
         Ok(h) => {
             // Se connecter ne suffit pas à dire que c'est bien notre démon : un tube usurpé
             // s'ouvrirait aussi. La vérification du serveur fait partie de la réponse.
@@ -357,5 +401,23 @@ pub fn present() -> bool {
             ok
         }
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn named_pipe_verifies_sid_and_exchanges_messages() {
+        let chemin = format!(r"\\.\pipe\lkatta-test-{}", std::process::id());
+        assert!(!present_sur(&chemin));
+        ecouter_sur(&chemin, |l| format!("reçu:{}\n", l.trim())).expect("écoute du tube");
+        assert!(present_sur(&chemin));
+        // Laisse au fil serveur une milliseconde pour recréer l'instance après la sonde.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert_eq!(envoyer_sur(&chemin, "salut maki").unwrap(), "reçu:salut maki");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert_eq!(envoyer_sur(&chemin, "coucou\ndeux").unwrap(), "reçu:coucou deux");
     }
 }

@@ -70,20 +70,50 @@ const ASTUCES: &[&str] = &[
     "Dis-moi « ouvre le gestionnaire de fichiers » : je retrouve l'appli même avec un nom approximatif.",
     "Je connais tes bureaux virtuels : « va sur le bureau 3 ».",
     "Clic molette sur moi : un numéro surprise (arbre, escalade, téléportation…).",
+    #[cfg(not(windows))]
     "Meta+V ouvre l'historique du presse-papiers de Plasma ; moi, je garde aussi le mien (/presse).",
+    #[cfg(not(windows))]
     "Meta+W affiche la vue d'ensemble de Plasma : toutes tes fenêtres et tes bureaux d'un coup d'œil.",
+    #[cfg(not(windows))]
     "Alt+Espace ouvre KRunner : calculs, conversions, lancement d'applis, recherche de fichiers.",
+    #[cfg(not(windows))]
     "Meta+Shift+S capture une zone de l'écran avec Spectacle.",
+    #[cfg(not(windows))]
     "Ctrl+F1 à Ctrl+F4 changent de bureau virtuel dans Plasma.",
+    #[cfg(not(windows))]
     "Meta+L verrouille la session quand tu t'éloignes.",
+    #[cfg(not(windows))]
     "Meta+. ouvre le sélecteur d'emoji de Plasma.",
+    #[cfg(not(windows))]
     "Meta+E ouvre Dolphin directement.",
+    #[cfg(not(windows))]
     "Dans Dolphin, F4 ouvre un terminal intégré dans le dossier affiché.",
+    #[cfg(not(windows))]
     "Dans Dolphin, Ctrl+I filtre les fichiers du dossier pendant que tu tapes.",
+    #[cfg(not(windows))]
     "Le cache de pacman grossit avec le temps : paccache -rk2 garde seulement les deux dernières versions (droits admin).",
+    #[cfg(not(windows))]
     "journalctl --disk-usage montre la place prise par les journaux système.",
+    #[cfg(not(windows))]
     "du -h -d1 ~ | sort -hr | head montre tes plus gros dossiers. Ou demande-le-moi.",
+    #[cfg(not(windows))]
     "Avant une mise à jour d'Arch, un œil sur archlinux.org/news évite les mauvaises surprises. Je surveille pour toi.",
+    #[cfg(windows)]
+    "Ctrl+Alt+K m'ouvre de n'importe quelle application, sans toucher la souris.",
+    #[cfg(windows)]
+    "Win+V ouvre l'historique du presse-papiers de Windows ; moi, je garde aussi le mien (/presse).",
+    #[cfg(windows)]
+    "Win+Tab affiche toutes tes fenêtres ouvertes et tes bureaux virtuels d'un coup d'œil.",
+    #[cfg(windows)]
+    "Win+Maj+S capture une zone précise de l'écran dans le presse-papiers.",
+    #[cfg(windows)]
+    "Win+Z propose des dispositions propres pour ranger tes fenêtres côte à côte.",
+    #[cfg(windows)]
+    "Win+L verrouille ta session d'un geste quand tu t'éloignes.",
+    #[cfg(windows)]
+    "Win+. ouvre le sélecteur d'emoji et de caractères spéciaux partout.",
+    #[cfg(windows)]
+    "Win+E ouvre l'Explorateur de fichiers ; Ctrl+Maj+Échap ouvre le Gestionnaire des tâches.",
     "Ctrl+R dans le terminal retrouve une ancienne commande en tapant un morceau.",
     "Une pause de cinq minutes par heure repose les yeux : regarde au loin quelques secondes.",
 ];

@@ -49,6 +49,7 @@ pub fn fichier() -> std::path::PathBuf {
     paths::config_dir().join("environnement.toml")
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn sortie(prog: &str, args: &[&str]) -> String {
     crate::hote::commande(prog)
         .args(args)
@@ -85,6 +86,7 @@ pub fn compositeur_de(bureau: &str, session: &str, var: impl Fn(&str) -> bool) -
 }
 
 /// Application associée à un type de fichier ou de lien (`xdg-mime`), avec son nom.
+#[cfg_attr(windows, allow(dead_code))]
 fn par_defaut(mime: &str, apps: &[crate::apps::App]) -> Appli {
     let id = sortie("xdg-mime", &["query", "default", mime]);
     let id = id.lines().next().unwrap_or("").trim_end_matches(".desktop").to_string();
@@ -105,6 +107,7 @@ pub const TERMINAUX: &[&str] = &[
 
 /// Terminal de l'utilisateur : $TERMINAL, réglage du bureau, sinon le premier installé
 /// (celui du bureau d'abord).
+#[cfg_attr(windows, allow(dead_code))]
 fn terminal(compositeur: &str) -> String {
     let nom = |c: &str| c.split_whitespace().next().unwrap_or("").rsplit('/').next().unwrap_or("").to_string();
     if let Ok(t) = std::env::var("TERMINAL") {
@@ -130,8 +133,77 @@ fn terminal(compositeur: &str) -> String {
     TERMINAUX.iter().find(|t| which(t)).map(|t| t.to_string()).unwrap_or_default()
 }
 
+#[cfg(windows)]
+fn appli_win(id: Option<String>, repli_id: &str, repli_nom: &str) -> Appli {
+    let Some(id) = id.filter(|s| !s.is_empty()) else {
+        return Appli { id: repli_id.into(), nom: repli_nom.into(), commande: String::new() };
+    };
+    let b = id.to_lowercase();
+    let nom = if b.contains("firefox") {
+        "Firefox"
+    } else if b.contains("chrome") {
+        "Google Chrome"
+    } else if b.contains("msedge") || b.contains("appxq0fevzme2pys62n3e0fbqa7peapykr8v") {
+        "Microsoft Edge"
+    } else if b.contains("brave") {
+        "Brave"
+    } else if b.contains("vivaldi") {
+        "Vivaldi"
+    } else if b.contains("thunderbird") {
+        "Thunderbird"
+    } else if b.contains("outlook") {
+        "Outlook"
+    } else if b.contains("acrobat") || b.contains("acrord") {
+        "Adobe Acrobat"
+    } else if b.contains("sumatrapdf") {
+        "SumatraPDF"
+    } else if b.contains("vscode") {
+        "VS Code"
+    } else if b.contains("notepad++") {
+        "Notepad++"
+    } else if b.contains("notepad") {
+        "Bloc-notes"
+    } else if b.contains("vlc") {
+        "VLC"
+    } else if b.contains("mpv") {
+        "mpv"
+    } else if b.contains("photos") {
+        "Photos"
+    } else {
+        id.split(['.', '_']).next().unwrap_or(&id)
+    };
+    Appli { nom: nom.to_string(), id, commande: String::new() }
+}
+
 /// Détecte l'environnement de cette session.
 pub fn detecter() -> Environnement {
+    #[cfg(windows)]
+    {
+        use crate::os::win::{appli_par_defaut, version_windows};
+        let association_url = |s: &str| appli_par_defaut(&format!(r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\{s}\UserChoice"));
+        let association_extension = |s: &str| appli_par_defaut(&format!(r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{s}\UserChoice"));
+        let term = ["wt", "pwsh", "powershell", "cmd"].into_iter().find(|t| which(t)).unwrap_or("powershell").to_string();
+        let bureau = version_windows().0;
+        return Environnement {
+            bureau,
+            session: "win32".into(),
+            compositeur: "dwm".into(),
+            navigateur: appli_win(association_url("https"), "msedge", "Microsoft Edge"),
+            mails: appli_win(association_url("mailto"), "", ""),
+            pdf: appli_win(association_extension(".pdf"), "msedge", "Microsoft Edge"),
+            images: appli_win(association_extension(".png"), "photos", "Photos"),
+            texte: appli_win(association_extension(".txt"), "notepad", "Bloc-notes"),
+            fichiers: Appli { id: "explorer".into(), nom: "Explorateur de fichiers".into(), commande: "explorer".into() },
+            videos: appli_win(association_extension(".mp4"), "", ""),
+            musique: appli_win(association_extension(".mp3"), "", ""),
+            terminal: term,
+            capture: "gdi32".into(),
+            fenetres: "win32".into(),
+            verrouille: false,
+        };
+    }
+    #[cfg(not(windows))]
+    {
     let bureau = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().replace(':', " / ");
     let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
     let compositeur = compositeur_de(&bureau, &session, |v| std::env::var_os(v).is_some()).to_string();
@@ -160,6 +232,7 @@ pub fn detecter() -> Environnement {
         session,
         compositeur,
         verrouille: false,
+    }
     }
 }
 

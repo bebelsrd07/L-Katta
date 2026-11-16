@@ -24,6 +24,7 @@ pub struct Fenetre {
 }
 
 impl Fenetre {
+    #[cfg_attr(windows, allow(dead_code))]
     pub fn from_json(s: &str) -> Option<Fenetre> {
         let v: serde_json::Value = serde_json::from_str(s).ok()?;
         let n = |k: &str| v.get(k).and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
@@ -63,6 +64,7 @@ fn couvre_tout(fenetre: (i32, i32, i32, i32), ecran: (i32, i32, i32, i32)) -> bo
     fenetre.0 <= ecran.0 && fenetre.1 <= ecran.1 && fenetre.2 >= ecran.2 && fenetre.3 >= ecran.3
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 const SCRIPT: &str = r#"// L Katta : signale la fenêtre active pour rester discret (chargé et retiré par L Katta).
 function signaler() {
     var w = workspace.activeWindow;
@@ -89,6 +91,7 @@ workspace.windowActivated.connect(function (w) {
 signaler();
 "#;
 
+#[cfg_attr(windows, allow(dead_code))]
 fn qdbus(args: &[&str]) -> Option<String> {
     let bin = if which("qdbus6") { "qdbus6" } else { "qdbus" };
     let o = crate::hote::commande(bin).args(args).stderr(Stdio::null()).output().ok()?;
@@ -96,6 +99,7 @@ fn qdbus(args: &[&str]) -> Option<String> {
 }
 
 /// Charge (ou recharge) le script KWin.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn charger_script() {
     let path = paths::data_dir().join("kwin-lkatta.js");
     if paths::write_private(&path, SCRIPT.as_bytes()).is_err() {
@@ -110,6 +114,7 @@ pub fn charger_script() {
 }
 
 pub fn retirer_script() {
+    #[cfg(not(windows))]
     let _ = qdbus(&["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", "lkatta"]);
 }
 
@@ -125,6 +130,7 @@ struct Service {
 /// fenêtres X11).
 static PONT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+#[cfg_attr(windows, allow(dead_code))]
 pub fn pont_actif() -> bool {
     PONT.load(std::sync::atomic::Ordering::Relaxed)
 }
@@ -249,7 +255,7 @@ mod win {
         fn GetWindowRect(fenetre: isize, r: *mut Rect) -> i32;
         fn IsIconic(fenetre: isize) -> i32;
         fn MonitorFromWindow(fenetre: isize, drapeaux: u32) -> isize;
-        fn GetMonitorInfoW(moniteur: isize, info: *mut InfoMoniteur) -> i32;
+        fn GetMonitorInfoW(moniteur: isize, info: *mut std::ffi::c_void) -> i32;
     }
 
     /// Démarre le fil de sondage. Comme le service D-Bus de Linux, il ne revient pas.
@@ -283,8 +289,15 @@ mod win {
             return None;
         }
         let classe = texte(f, true);
-        if classe == NOTRE_CLASSE {
+        // Le maki, la barre des tâches et le tiroir d'icônes : on garde la fenêtre précédente,
+        // comme le script KWin ignore `dock` et `notification`.
+        if matches!(classe.as_str(), NOTRE_CLASSE | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "NotifyIconOverflowWindow") {
             return None;
+        }
+        // Le fond d'écran (`Progman`, `WorkerW`) couvre tout le moniteur : sans ce filtre, cliquer
+        // sur le bureau ferait croire à un film en plein écran et ferait disparaître le maki.
+        if matches!(classe.as_str(), "Progman" | "WorkerW") {
+            return Some(Fenetre::default());
         }
         let titre = texte(f, false);
         let mut r = Rect::default();
@@ -292,15 +305,13 @@ mod win {
         if unsafe { GetWindowRect(f, &mut r) } == 0 {
             return None;
         }
+        let ecran = crate::os::win::moniteur_du_point(r.left + (r.right - r.left) / 2, r.top + (r.bottom - r.top) / 2).unwrap_or_default();
         Some(Fenetre {
             plein_ecran: couvre_le_moniteur(f, &r),
             rect: (r.left as f32, r.top as f32, (r.right - r.left) as f32, (r.bottom - r.top) as f32),
             classe,
             titre,
-            // Un seul moniteur est pris en compte pour l'instant. Laisser l'écran vide fait que le
-            // maki ne compare pas les noms, au lieu de comparer et de toujours perdre.
-            ecran: String::new(),
-            // Coordonnées déjà dans celles du maki : aucune conversion d'échelle à faire.
+            ecran,
             scene: (0.0, 0.0),
         })
     }
@@ -322,7 +333,7 @@ mod win {
         // garantit un handle valable même si la fenêtre est hors écran.
         let m = unsafe { MonitorFromWindow(f, MONITOR_DEFAULTTONEAREST) };
         // SAFETY : `info` est à nous et vit jusqu'à la fin de l'appel.
-        if m == 0 || unsafe { GetMonitorInfoW(m, &mut info) } == 0 {
+        if m == 0 || unsafe { GetMonitorInfoW(m, &mut info as *mut InfoMoniteur as *mut std::ffi::c_void) } == 0 {
             // Sans renseignement sur le moniteur, mieux vaut dire « pas plein écran » : se taire à
             // tort est plus gênant que parler à tort.
             return false;
@@ -355,9 +366,11 @@ mod win {
 
 // --- raccourci global (KGlobalAccel) ----------------------------------------------------
 
+#[cfg_attr(windows, allow(dead_code))]
 const ACTION: &str = "['lkatta', 'discuter', 'L Katta', 'Ouvrir la bulle de discussion']";
 
 /// « Meta+K », « Ctrl+Alt+Espace », « Meta+F2 »… en code de touche Qt (0 = invalide).
+#[cfg_attr(windows, allow(dead_code))]
 pub fn qt_key(seq: &str) -> Option<i32> {
     let mut code = 0i32;
     let mut key = None;
@@ -376,6 +389,7 @@ pub fn qt_key(seq: &str) -> Option<i32> {
     key.map(|k| code | k)
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn kga(method: &str, args: &[&str]) -> Option<String> {
     let o = crate::hote::commande("gdbus")
         .args(["call", "--session", "--dest", "org.kde.kglobalaccel", "--object-path", "/kglobalaccel", "--method", &format!("org.kde.KGlobalAccel.{method}")])
@@ -388,7 +402,16 @@ fn kga(method: &str, args: &[&str]) -> Option<String> {
 
 /// Enregistre le raccourci dans Plasma et attend qu'on le presse (fil dédié).
 pub fn raccourci(seq: &str, tx: impl Fn(Msg) + Send + 'static) {
+    // Sous Windows, le raccourci est enregistré directement sur la fenêtre du maki (`RegisterHotKey`),
+    // et mis à jour à chaud dès que `config.toml` change.
+    #[cfg(windows)]
+    {
+        let _ = (seq, tx);
+        return;
+    }
     // GNOME : raccourci personnalisé qui lance `lkatta raccourci` (pas de KGlobalAccel).
+    #[cfg(not(windows))]
+    {
     if crate::gnome::bureau_gnome() {
         let seq = seq.to_string();
         std::thread::spawn(move || crate::gnome::raccourci(&seq));
@@ -429,10 +452,12 @@ pub fn raccourci(seq: &str, tx: impl Fn(Msg) + Send + 'static) {
         }
         let _ = child.wait();
     });
+    }
 }
 
 /// Donne le clavier à la bulle (ouverte par le raccourci) : un petit script KWin active la
 /// surface du maki. Elle reste « OnDemand » : un clic ailleurs rend le clavier.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn focaliser_bulle() {
     std::thread::spawn(|| {
         std::thread::sleep(Duration::from_millis(120));
@@ -456,30 +481,40 @@ if (best) workspace.activeWindow = best;
     });
 }
 
-/// « Ne pas déranger » activé (Plasma et tout service qui suit la norme ; GNOME à part) ?
+/// « Ne pas déranger » activé (Plasma, GNOME, ou mode présentation / concentration de Windows) ?
 pub fn ne_pas_deranger() -> bool {
-    if crate::gnome::bureau_gnome() {
-        return crate::gnome::ne_pas_deranger();
+    #[cfg(windows)]
+    return crate::os::win::ne_pas_deranger();
+    #[cfg(not(windows))]
+    {
+        if crate::gnome::bureau_gnome() {
+            return crate::gnome::ne_pas_deranger();
+        }
+        crate::hote::commande("gdbus")
+            .args(["call", "--session", "--dest", "org.freedesktop.Notifications", "--object-path", "/org/freedesktop/Notifications", "--method", "org.freedesktop.DBus.Properties.Get", "org.freedesktop.Notifications", "Inhibited"])
+            .stderr(Stdio::null())
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains("true"))
+            .unwrap_or(false)
     }
-    crate::hote::commande("gdbus")
-        .args(["call", "--session", "--dest", "org.freedesktop.Notifications", "--object-path", "/org/freedesktop/Notifications", "--method", "org.freedesktop.DBus.Properties.Get", "org.freedesktop.Notifications", "Inhibited"])
-        .stderr(Stdio::null())
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains("true"))
-        .unwrap_or(false)
 }
 
 /// Le micro est-il utilisé (enregistrement en cours : visio, appel) ?
 pub fn micro_utilise() -> bool {
-    if !which("pactl") {
-        return false;
+    #[cfg(windows)]
+    return crate::os::win::micro_utilise();
+    #[cfg(not(windows))]
+    {
+        if !which("pactl") {
+            return false;
+        }
+        crate::hote::commande("pactl")
+            .args(["list", "source-outputs", "short"])
+            .stderr(Stdio::null())
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| !l.trim().is_empty()))
+            .unwrap_or(false)
     }
-    crate::hote::commande("pactl")
-        .args(["list", "source-outputs", "short"])
-        .stderr(Stdio::null())
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| !l.trim().is_empty()))
-        .unwrap_or(false)
 }
 
 /// Veille légère : « Ne pas déranger » et micro, toutes les 3 s, signalés quand ils changent.

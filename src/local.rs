@@ -33,12 +33,27 @@ pub const CANDIDATS: [Candidat; 5] = [
 ];
 
 pub fn machine() -> Machine {
-    let ram_go = std::fs::read_to_string("/proc/meminfo")
-        .ok()
-        .and_then(|s| s.lines().find_map(|l| l.strip_prefix("MemTotal:")).and_then(|v| v.trim().trim_end_matches("kB").trim().parse::<f32>().ok()))
-        .map(|kb| kb / 1024.0 / 1024.0)
-        .unwrap_or(4.0);
-    Machine { ram_go, gpu: nvidia().or_else(amd) }
+    #[cfg(windows)]
+    {
+        let ram_go = crate::os::win::memoire_vive().map(|(t, _)| (t as f64 / 1024f64.powi(3)) as f32).unwrap_or(4.0);
+        let gpu = nvidia().or_else(|| {
+            crate::os::win::cartes_graphiques()
+                .into_iter()
+                .filter_map(|(n, go)| Some((n, go? as f32)))
+                .filter(|(_, go)| *go >= 2.0)
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+        });
+        return Machine { ram_go, gpu };
+    }
+    #[cfg(not(windows))]
+    {
+        let ram_go = std::fs::read_to_string("/proc/meminfo")
+            .ok()
+            .and_then(|s| s.lines().find_map(|l| l.strip_prefix("MemTotal:")).and_then(|v| v.trim().trim_end_matches("kB").trim().parse::<f32>().ok()))
+            .map(|kb| kb / 1024.0 / 1024.0)
+            .unwrap_or(4.0);
+        Machine { ram_go, gpu: nvidia().or_else(amd) }
+    }
 }
 
 fn nvidia() -> Option<(String, f32)> {
@@ -48,6 +63,7 @@ fn nvidia() -> Option<(String, f32)> {
     Some((nom.trim().to_string(), mo.trim().parse::<f32>().ok()? / 1024.0))
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn amd() -> Option<(String, f32)> {
     let mut best: Option<f32> = None;
     for e in std::fs::read_dir("/sys/class/drm").ok()?.flatten() {
@@ -84,8 +100,20 @@ pub fn resume(m: &Machine) -> String {
     }
 }
 
-/// Ollama est-il installé (dans le PATH) ?
+#[cfg(windows)]
+fn ollama_binaire() -> Option<std::path::PathBuf> {
+    if crate::config::which("ollama") {
+        return Some("ollama".into());
+    }
+    let p = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from)?.join(r"Programs\Ollama\ollama.exe");
+    p.is_file().then_some(p)
+}
+
+/// Ollama est-il installé (dans le PATH, ou dans son dossier habituel sous Windows) ?
 pub fn ollama_installe() -> bool {
+    #[cfg(windows)]
+    return ollama_binaire().is_some();
+    #[cfg(not(windows))]
     std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("ollama").is_file()))
 }
 
@@ -107,7 +135,11 @@ fn demarrer() -> Result<(), String> {
     if !ollama_installe() {
         return Err(t!("Ollama n'est pas installé.").into());
     }
-    crate::hote::commande("ollama")
+    #[cfg(windows)]
+    let prog = ollama_binaire().unwrap_or_else(|| "ollama".into());
+    #[cfg(not(windows))]
+    let prog = "ollama";
+    crate::hote::commande(prog)
         .arg("serve")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())

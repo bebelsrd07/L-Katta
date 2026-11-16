@@ -62,15 +62,8 @@ impl Compte {
 }
 
 fn secret(c: &Compte) -> Result<String, String> {
-    let o = crate::hote::commande("secret-tool")
-        .args(["lookup", "service", "lkatta", "compte", &c.adresse])
-        .output()
-        .map_err(|_| t!("secret-tool absent (paquet libsecret)").to_string())?;
-    let p = String::from_utf8_lossy(&o.stdout).trim_end_matches('\n').to_string();
-    if p.is_empty() {
-        return Err(t!("pas de mot de passe pour {} : lancer « lkatta compte-mail {} »", c.adresse, c.adresse));
-    }
-    Ok(p)
+    crate::cles::lookup(&["service", "lkatta", "compte", &c.adresse])
+        .ok_or_else(|| t!("pas de mot de passe pour {} : lancer « lkatta compte-mail {} »", c.adresse, c.adresse))
 }
 
 /// Enregistre un mot de passe tapé dans le panneau de réglages (envoyé au trousseau par
@@ -85,11 +78,8 @@ pub fn remove_password(adresse: &str) {
 
 /// Enregistre le mot de passe dans le trousseau (saisi par l'utilisateur dans le terminal).
 pub fn store_secret(adresse: &str) -> Result<(), String> {
-    let st = crate::hote::commande("secret-tool")
-        .args(["store", &format!("--label=L Katta : {adresse}"), "service", "lkatta", "compte", adresse])
-        .status()
-        .map_err(|_| t!("secret-tool absent (paquet libsecret)").to_string())?;
-    if st.success() { Ok(()) } else { Err(t!("mot de passe non enregistré").into()) }
+    crate::cles::store_interactif(&format!("L Katta : {adresse}"), &["service", "lkatta", "compte", adresse])
+        .map_err(|_| t!("mot de passe non enregistré").into())
 }
 
 fn host_of(url: &str) -> String {
@@ -482,12 +472,15 @@ pub fn pieces_jointes(raw: &str) -> Vec<PieceJointe> {
 
 /// Dossier de téléchargement de l'utilisateur (nom localisé selon la langue du système).
 pub fn dossier_telechargements() -> std::path::PathBuf {
-    let xdg = crate::hote::commande("xdg-user-dir").arg("DOWNLOAD").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|s| !s.is_empty());
     let home = paths::home_dir();
-    match xdg.map(std::path::PathBuf::from) {
-        Some(p) if p != home => p,
-        _ => home.join("Downloads"),
+    #[cfg(not(windows))]
+    {
+        let xdg = crate::hote::commande("xdg-user-dir").arg("DOWNLOAD").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|s| !s.is_empty());
+        if let Some(p) = xdg.map(std::path::PathBuf::from).filter(|p| p != &home) {
+            return p;
+        }
     }
+    home.join("Downloads")
 }
 
 /// Chemin libre : `rapport.pdf`, sinon `rapport (2).pdf`…

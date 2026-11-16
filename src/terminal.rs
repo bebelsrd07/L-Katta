@@ -44,6 +44,7 @@ fn current() -> Option<(String, String)> {
 }
 
 /// Lance un programme dans sa propre unité systemd (il survit à un redémarrage du maki).
+#[cfg_attr(windows, allow(dead_code))]
 fn hors_du_maki(prog: &str, args: &[String]) -> Result<(), String> {
     let mut c = if which("systemd-run") {
         let mut c = crate::hote::commande("systemd-run");
@@ -57,6 +58,9 @@ fn hors_du_maki(prog: &str, args: &[String]) -> Result<(), String> {
 }
 
 pub fn available() -> bool {
+    #[cfg(windows)]
+    return which("wt") || which("pwsh") || which("powershell") || which("cmd");
+    #[cfg(not(windows))]
     which("konsole")
 }
 
@@ -91,11 +95,61 @@ pub fn write(texte: &str, entree: bool) -> Result<String, String> {
 /// Lance une commande dans un nouvel onglet Konsole visible (ou une nouvelle fenêtre).
 /// Le terminal de l'utilisateur est-il Konsole (lecture et écriture dans le terminal possibles) ?
 pub fn konsole() -> bool {
-    let t = crate::environnement::courant().terminal;
-    (t.is_empty() || t == "konsole") && available()
+    #[cfg(windows)]
+    return false;
+    #[cfg(not(windows))]
+    {
+        let t = crate::environnement::courant().terminal;
+        (t.is_empty() || t == "konsole") && available()
+    }
+}
+
+#[cfg(windows)]
+fn lancer_terminal_windows(cmd: &str) -> Result<String, String> {
+    use base64::Engine;
+    use std::os::windows::process::CommandExt;
+
+    let script = format!("{cmd}\r\nWrite-Host ''\r\nWrite-Host '[L Katta] Terminé. Ce terminal reste ouvert.'");
+    let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let enc = base64::engine::general_purpose::STANDARD.encode(utf16);
+    let ps = if which("pwsh") { "pwsh" } else { "powershell" };
+    let dossier = crate::paths::travail();
+
+    if which("wt") {
+        std::process::Command::new("wt")
+            .args(["-w", "0", "nt", "--title", "L Katta", "-d"])
+            .arg(&dossier)
+            .args([ps, "-NoLogo", "-NoExit", "-EncodedCommand", &enc])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        return Ok(format!("Lancé dans un nouvel onglet Windows Terminal (« L Katta ») : {cmd}\nLe résultat s'affiche là-bas."));
+    }
+    if which(ps) {
+        std::process::Command::new(ps)
+            .args(["-NoLogo", "-NoExit", "-EncodedCommand", &enc])
+            .current_dir(&dossier)
+            .creation_flags(crate::os::win::CREATE_NEW_CONSOLE)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        return Ok(format!("Lancé dans une nouvelle fenêtre PowerShell : {cmd}\nLe résultat s'affiche là-bas."));
+    }
+    std::process::Command::new("cmd")
+        .args(["/k", cmd])
+        .current_dir(&dossier)
+        .creation_flags(crate::os::win::CREATE_NEW_CONSOLE)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(format!("Lancé dans une nouvelle fenêtre d'invite de commandes : {cmd}\nLe résultat s'affiche là-bas."))
 }
 
 pub fn run_visible(cmd: &str) -> Result<String, String> {
+    #[cfg(windows)]
+    return lancer_terminal_windows(cmd);
+    #[cfg(not(windows))]
+    {
     let script = format!("{cmd}; echo; echo '[L Katta] Terminé. Ce terminal reste ouvert.'; exec bash");
     // Autre terminal que Konsole : le sien, dans une fenêtre à part.
     if !konsole() {
@@ -131,4 +185,5 @@ pub fn run_visible(cmd: &str) -> Result<String, String> {
         .spawn()
         .map_err(|e| e.to_string())?;
     Ok(format!("Lancé dans une nouvelle fenêtre Konsole : {cmd}\nLe résultat s'affiche là-bas ; demande-moi de lire le terminal ensuite."))
+    }
 }

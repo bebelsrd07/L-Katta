@@ -180,14 +180,27 @@ fn invisible(c: char) -> bool {
 
 /// Police sans empattement du système (repli des signes rares).
 fn systeme_sans(style: &str) -> Option<FontVec> {
-    let mut c = vec![];
-    // Une police qui a vraiment les signes dont la bulle se sert (coche, flèches, puces) :
-    // celle du système par défaut ne les a pas toujours.
-    if let Ok(o) = std::process::Command::new("fc-match").args(["-f", "%{file}", &format!("sans:style={style}:charset=2713 21b3 25cf 25b8 2192 2022")]).output() {
-        c.push(String::from_utf8_lossy(&o.stdout).to_string());
+    #[cfg(windows)]
+    {
+        let fonts = std::path::PathBuf::from(std::env::var_os("WINDIR").unwrap_or_else(|| r"C:\Windows".into())).join("Fonts");
+        let candidats = if style.eq_ignore_ascii_case("bold") {
+            ["segoeuib.ttf", "segoeui.ttf", "seguisym.ttf", "arialbd.ttf"]
+        } else {
+            ["seguisym.ttf", "segoeui.ttf", "arial.ttf", "tahoma.ttf"]
+        };
+        return candidats.into_iter().filter_map(|n| std::fs::read(fonts.join(n)).ok()).find_map(|b| FontVec::try_from_vec(b).ok());
     }
-    c.extend(["/usr/share/fonts/TTF/DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/noto/NotoSans-Regular.ttf"].map(String::from));
-    c.into_iter().filter_map(|p| std::fs::read(p.trim()).ok()).find_map(|b| FontVec::try_from_vec(b).ok())
+    #[cfg(not(windows))]
+    {
+        let mut c = vec![];
+        // Une police qui a vraiment les signes dont la bulle se sert (coche, flèches, puces) :
+        // celle du système par défaut ne les a pas toujours.
+        if let Ok(o) = std::process::Command::new("fc-match").args(["-f", "%{file}", &format!("sans:style={style}:charset=2713 21b3 25cf 25b8 2192 2022")]).output() {
+            c.push(String::from_utf8_lossy(&o.stdout).to_string());
+        }
+        c.extend(["/usr/share/fonts/TTF/DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/noto/NotoSans-Regular.ttf"].map(String::from));
+        c.into_iter().filter_map(|p| std::fs::read(p.trim()).ok()).find_map(|b| FontVec::try_from_vec(b).ok())
+    }
 }
 
 /// Police des titres (Alegreya, demi-gras).
@@ -646,13 +659,17 @@ pub fn kde_is_dark() -> bool {
     false
 }
 
-/// « clair », « sombre » ou « auto » (suit KDE).
+/// « clair », « sombre » ou « auto » (suit le thème du système : KDE ou Windows).
 pub fn set_theme(name: &str) {
     let t = match name {
         "sombre" => SOMBRE,
         "clair" => CLAIR,
         _ => {
-            if kde_is_dark() { SOMBRE } else { CLAIR }
+            #[cfg(windows)]
+            let sombre = crate::os::win::theme_sombre();
+            #[cfg(not(windows))]
+            let sombre = kde_is_dark();
+            if sombre { SOMBRE } else { CLAIR }
         }
     };
     THEME.with(|x| x.set(t));
@@ -924,12 +941,24 @@ fn police<'a>(text: &'a Text, st: St) -> &'a Text {
 
 /// Police à chasse fixe (code).
 pub fn load_mono() -> Option<Text> {
-    let mut c = vec![];
-    if let Ok(o) = std::process::Command::new("fc-match").args(["-f", "%{file}", "monospace:style=Regular"]).output() {
-        c.push(String::from_utf8_lossy(&o.stdout).to_string());
+    #[cfg(windows)]
+    {
+        let fonts = std::path::PathBuf::from(std::env::var_os("WINDIR").unwrap_or_else(|| r"C:\Windows".into())).join("Fonts");
+        return ["CascadiaMono.ttf", "consola.ttf", "lucon.ttf", "cour.ttf"]
+            .into_iter()
+            .filter_map(|n| std::fs::read(fonts.join(n)).ok())
+            .find_map(|b| FontVec::try_from_vec(b).ok())
+            .map(|font| Text { font, repli: systeme_sans("Regular") });
     }
-    c.extend(["/usr/share/fonts/TTF/DejaVuSansMono.ttf", "/usr/share/fonts/noto/NotoSansMono-Regular.ttf"].map(String::from));
-    c.into_iter().filter_map(|p| std::fs::read(p.trim()).ok()).find_map(|b| FontVec::try_from_vec(b).ok()).map(|font| Text { font, repli: systeme_sans("Regular") })
+    #[cfg(not(windows))]
+    {
+        let mut c = vec![];
+        if let Ok(o) = std::process::Command::new("fc-match").args(["-f", "%{file}", "monospace:style=Regular"]).output() {
+            c.push(String::from_utf8_lossy(&o.stdout).to_string());
+        }
+        c.extend(["/usr/share/fonts/TTF/DejaVuSansMono.ttf", "/usr/share/fonts/noto/NotoSansMono-Regular.ttf"].map(String::from));
+        c.into_iter().filter_map(|p| std::fs::read(p.trim()).ok()).find_map(|b| FontVec::try_from_vec(b).ok()).map(|font| Text { font, repli: systeme_sans("Regular") })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

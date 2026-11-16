@@ -9,11 +9,15 @@ use std::time::Duration;
 /// Plafond, en Mo. Le maki vit d'ordinaire avec 60 à 120 Mo.
 pub const PLAFOND_MO: u64 = 500;
 
-/// Mémoire résidente du processus (Mo), d'après /proc/self/status.
+/// Mémoire résidente du processus (Mo) : `/proc/self/status` sous Linux, Working Set sous Windows.
 pub fn memoire_mo() -> Option<u64> {
+    #[cfg(windows)]
+    return crate::os::win::memoire_processus_mo();
+    #[cfg(not(windows))]
     lire(&std::fs::read_to_string("/proc/self/status").ok()?)
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn lire(status: &str) -> Option<u64> {
     let kb = status.lines().find_map(|l| l.strip_prefix("VmRSS:"))?.trim().trim_end_matches("kB").trim().parse::<u64>().ok()?;
     Some(kb / 1024)

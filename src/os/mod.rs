@@ -14,6 +14,8 @@
 //!   vraiment la protection sur ce système.
 
 pub mod canal;
+#[cfg(windows)]
+pub mod win;
 
 use std::path::Path;
 
@@ -183,6 +185,7 @@ pub fn osstring_depuis_octets(o: Vec<u8>) -> std::ffi::OsString {
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 pub fn osstring_depuis_octets(o: Vec<u8>) -> std::ffi::OsString {
     // Les chemins Windows sont en UTF-16, mais ce qui arrive ici vient d'une liste d'URI en
     // octets : l'UTF-8 est donc bien le décodage à tenter. Un octet invalide devient le
@@ -236,17 +239,16 @@ pub fn notifier(titre: &str, texte: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
 pub fn notifier(titre: &str, texte: &str) -> Result<(), String> {
-    // Dit clairement pourquoi ça ne part pas, plutôt que de rendre Ok(()) : un rappel que
-    // l'utilisateur croirait envoyé et qui n'a jamais été affiché est pire qu'un échec annoncé.
-    //
-    // Sur Windows le natif est `ToastNotificationManager` (WinRT), qui demande les liaisons
-    // `windows` — donc une dépendance nouvelle, et le `Cargo.lock` ne peut pas être régénéré
-    // d'ici. C'est l'étape 2 du portage. Contourner par PowerShell aurait l'air de marcher,
-    // mais c'est exactement le genre d'approximation que ce projet s'interdit.
-    //
-    // Ailleurs sur Unix, `notify-rust` n'est plus une dépendance que pour Linux.
+    // Passe par l'icône de la zone de notification (`Shell_NotifyIconW`, `NIF_INFO`) tenue par la
+    // boucle Win32 : la bulle s'affiche dans le centre de notifications de Windows 10 et 11 avec
+    // l'icône du maki, sans PowerShell ni dépendance externe.
+    win::pousser_notification(titre, texte)
+}
+
+#[cfg(all(not(target_os = "linux"), not(windows)))]
+pub fn notifier(titre: &str, texte: &str) -> Result<(), String> {
     let _ = (titre, texte);
     Err(t!("les notifications du bureau ne sont pas encore câblées sur ce système").to_string())
 }
@@ -270,15 +272,13 @@ pub fn fil_discret() {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
 pub fn fil_discret() {
-    // Sur Windows l'équivalent est `SetThreadPriority(THREAD_PRIORITY_LOWEST)` couplé à
-    // `PROCESS_MODE_BACKGROUND_BEGIN`, qui demandent les liaisons Win32 — donc une dépendance
-    // nouvelle, impossible à ajouter tant que le `Cargo.lock` ne peut pas être régénéré. C'est
-    // l'étape 2 du portage. L'indexation reste exacte, seulement moins discrète.
-    //
-    // Rien non plus sur les autres Unix : `libc` n'est plus une dépendance que pour Linux.
+    win::fil_discret();
 }
+
+#[cfg(all(not(target_os = "linux"), not(windows)))]
+pub fn fil_discret() {}
 
 #[cfg(test)]
 mod tests {

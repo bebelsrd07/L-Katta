@@ -16,6 +16,7 @@ pub struct App {
     pub cachee: bool,
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn dirs() -> Vec<PathBuf> {
     let h = paths::home_dir();
     // Ordre XDG : ceux de l'utilisateur d'abord (ils remplacent ceux du système de même nom).
@@ -89,7 +90,76 @@ pub fn parse_desktop(id: &str, txt: &str) -> Option<App> {
     })
 }
 
+#[cfg(windows)]
+fn parcourir_menu(dossier: &std::path::Path, profondeur: u8, vus: &mut std::collections::HashSet<String>, out: &mut Vec<App>) {
+    if profondeur == 0 {
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(dossier) else { return };
+    for e in rd.flatten() {
+        let p = e.path();
+        let nom_os = e.file_name();
+        let nom_f = nom_os.to_string_lossy();
+        if p.is_dir() {
+            // Pas le dossier Démarrage : ce sont des services d'ouverture de session, pas un catalogue.
+            if !matches!(nom_f.to_lowercase().as_str(), "startup" | "démarrage" | "administrative tools") {
+                parcourir_menu(&p, profondeur - 1, vus, out);
+            }
+            continue;
+        }
+        let Some(ext) = p.extension().and_then(|s| s.to_str()) else { continue };
+        if !ext.eq_ignore_ascii_case("lnk") {
+            continue;
+        }
+        let nom = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let bas = nom.to_lowercase();
+        if nom.is_empty() || bas.starts_with("uninstall") || bas.starts_with("désinstaller") || !vus.insert(bas.clone()) {
+            continue;
+        }
+        let parent = dossier.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        out.push(App {
+            id: bas.replace(' ', "."),
+            nom,
+            exec: p.to_string_lossy().into_owned(),
+            bin: bas,
+            termes: parent,
+            terminal: false,
+            cachee: false,
+        });
+    }
+}
+
+#[cfg(windows)]
+fn index_windows() -> Vec<App> {
+    let mut vus = std::collections::HashSet::new();
+    let mut out = vec![];
+    for var in ["APPDATA", "ProgramData"] {
+        if let Some(base) = std::env::var_os(var) {
+            parcourir_menu(&PathBuf::from(base).join(r"Microsoft\Windows\Start Menu\Programs"), 4, &mut vus, &mut out);
+        }
+    }
+    // Outils intégrés à Windows qui n'ont pas toujours de fichier .lnk classique (applications UWP/système).
+    for (id, nom, bin, termes) in [
+        ("explorer", "Explorateur de fichiers", "explorer.exe", "file explorer fichiers dossiers gestionnaire"),
+        ("notepad", "Bloc-notes", "notepad.exe", "notepad editeur texte notes"),
+        ("calc", "Calculatrice", "calc.exe", "calculator calcul"),
+        ("mspaint", "Paint", "mspaint.exe", "dessin image peinture"),
+        ("taskmgr", "Gestionnaire des tâches", "taskmgr.exe", "task manager processus memoire cpu"),
+        ("snippingtool", "Outil Capture d'écran", "snippingtool.exe", "screenshot capture ecran"),
+        ("control", "Panneau de configuration", "control.exe", "control panel parametres reglages"),
+    ] {
+        if vus.insert(nom.to_lowercase()) {
+            out.push(App { id: id.into(), nom: nom.into(), exec: bin.into(), bin: id.into(), termes: termes.into(), terminal: false, cachee: false });
+        }
+    }
+    out
+}
+
 pub fn index() -> Vec<App> {
+    #[cfg(windows)]
+    return index_windows();
+    #[cfg(not(windows))]
+    {
     let mut seen = std::collections::HashSet::new();
     let mut out = vec![];
     for d in dirs() {
@@ -107,6 +177,7 @@ pub fn index() -> Vec<App> {
         }
     }
     out
+    }
 }
 
 fn norm(s: &str) -> String {
@@ -183,21 +254,35 @@ pub fn resolve<'a>(apps: &'a [App], query: &str) -> Option<&'a App> {
         .map(|(a, _)| a)
 }
 
-/// Lance une application par son nom (« dolphin », « gestionnaire de fichiers », « mission center »).
+/// Lance une application par son nom (« dolphin », « explorateur », « firefox », « bloc-notes »).
 pub fn launch(query: &str) -> Result<String, String> {
     let apps = index();
     let a = resolve(&apps, query).ok_or_else(|| format!("aucune application ne correspond à « {query} »"))?;
-    let cmd = if crate::config::which("gtk-launch") || crate::config::which("kioclient") {
-        // Laisse le bureau lancer l'entrée .desktop (variables, Flatpak, activation D-Bus).
-        if crate::config::which("gtk-launch") { format!("gtk-launch {}", a.id) } else { format!("kioclient exec {}.desktop", a.id) }
-    } else {
-        a.exec.clone()
-    };
-    crate::hote::commande("sh")
-        .args(["-c", &format!("setsid {cmd} >/dev/null 2>&1 &")])
-        .status()
-        .map_err(|e| e.to_string())?;
-    Ok(format!("Lancé : {} ({})", a.nom, a.id))
+    #[cfg(windows)]
+    {
+        if a.exec.to_ascii_lowercase().ends_with(".lnk") {
+            crate::os::win::lancer_raccourci_menu(std::path::Path::new(&a.exec))?;
+        } else if ["explorer.exe", "notepad.exe", "calc.exe", "mspaint.exe", "taskmgr.exe", "snippingtool.exe", "control.exe"].contains(&a.exec.as_str()) {
+            crate::hote::commande(&a.exec).spawn().map_err(|e| e.to_string())?;
+        } else {
+            return Err("Application Windows inconnue".into());
+        }
+        return Ok(format!("Lancé : {} ({})", a.nom, a.id));
+    }
+    #[cfg(not(windows))]
+    {
+        let cmd = if crate::config::which("gtk-launch") || crate::config::which("kioclient") {
+            // Laisse le bureau lancer l'entrée .desktop (variables, Flatpak, activation D-Bus).
+            if crate::config::which("gtk-launch") { format!("gtk-launch {}", a.id) } else { format!("kioclient exec {}.desktop", a.id) }
+        } else {
+            a.exec.clone()
+        };
+        crate::hote::commande("sh")
+            .args(["-c", &format!("setsid {cmd} >/dev/null 2>&1 &")])
+            .status()
+            .map_err(|e| e.to_string())?;
+        Ok(format!("Lancé : {} ({})", a.nom, a.id))
+    }
 }
 
 pub fn list_text() -> String {

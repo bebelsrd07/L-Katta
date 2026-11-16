@@ -4,6 +4,7 @@
 
 use std::process::Stdio;
 
+#[cfg_attr(windows, allow(dead_code))]
 fn lire(p: &str) -> String {
     std::fs::read_to_string(p).unwrap_or_default()
 }
@@ -14,12 +15,14 @@ fn cmd(prog: &str, args: &[&str]) -> Option<String> {
     o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|s| !s.is_empty())
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn os_release(txt: &str) -> String {
     let get = |k: &str| txt.lines().find_map(|l| l.strip_prefix(&format!("{k}="))).map(|v| v.trim_matches('"').to_string());
     get("PRETTY_NAME").or_else(|| get("NAME")).unwrap_or_else(|| "Linux".into())
 }
 
 /// Modèle du processeur et nombre de cœurs logiques.
+#[cfg_attr(windows, allow(dead_code))]
 fn processeur(cpuinfo: &str) -> Option<String> {
     let modele = cpuinfo.lines().find_map(|l| l.strip_prefix("model name").and_then(|r| r.split_once(':')).map(|(_, v)| v.trim().to_string()))
         // ARM : pas de « model name ».
@@ -29,6 +32,7 @@ fn processeur(cpuinfo: &str) -> Option<String> {
 }
 
 /// Cartes graphiques vues par le noyau (tout fabricant), avec la mémoire si on la connaît.
+#[cfg_attr(windows, allow(dead_code))]
 fn cartes_graphiques() -> Vec<String> {
     let mut v = vec![];
     if let Some(l) = cmd("lspci", &[]) {
@@ -41,6 +45,7 @@ fn cartes_graphiques() -> Vec<String> {
 
 /// Disques réels, une ligne par système de fichiers : les sous-volumes (btrfs) et les montages
 /// d'AppImage ou de Snap, qui répètent le même disque, sont écartés.
+#[cfg_attr(windows, allow(dead_code))]
 fn disques(df: &str) -> String {
     let mut vus = std::collections::HashSet::new();
     let mut out = vec![];
@@ -62,26 +67,53 @@ fn disques(df: &str) -> String {
 
 /// Batterie : niveau et état, si l'ordinateur en a une.
 fn batterie() -> Option<String> {
-    let d = std::fs::read_dir("/sys/class/power_supply").ok()?;
-    for e in d.flatten() {
-        let p = e.path();
-        if lire(&format!("{}/type", p.display())).trim() == "Battery" {
-            let cap = lire(&format!("{}/capacity", p.display()));
-            let st = lire(&format!("{}/status", p.display()));
-            let usure = match (lire(&format!("{}/energy_full", p.display())).trim().parse::<f64>(), lire(&format!("{}/energy_full_design", p.display())).trim().parse::<f64>()) {
-                (Ok(a), Ok(b)) if b > 0.0 => format!(", santé {:.0} %", a / b * 100.0),
-                _ => String::new(),
-            };
-            return Some(format!("{} % ({}){usure}", cap.trim(), st.trim()));
+    #[cfg(windows)]
+    return crate::os::win::batterie();
+    #[cfg(not(windows))]
+    {
+        let d = std::fs::read_dir("/sys/class/power_supply").ok()?;
+        for e in d.flatten() {
+            let p = e.path();
+            if lire(&format!("{}/type", p.display())).trim() == "Battery" {
+                let cap = lire(&format!("{}/capacity", p.display()));
+                let st = lire(&format!("{}/status", p.display()));
+                let usure = match (lire(&format!("{}/energy_full", p.display())).trim().parse::<f64>(), lire(&format!("{}/energy_full_design", p.display())).trim().parse::<f64>()) {
+                    (Ok(a), Ok(b)) if b > 0.0 => format!(", santé {:.0} %", a / b * 100.0),
+                    _ => String::new(),
+                };
+                return Some(format!("{} % ({}){usure}", cap.trim(), st.trim()));
+            }
         }
+        None
     }
-    None
 }
 
 /// Nombre de paquets selon le gestionnaire présent (une distribution peut en avoir plusieurs).
 fn paquets() -> Vec<String> {
     let compte = |s: String| s.lines().filter(|l| !l.trim().is_empty()).count();
     let mut v = vec![];
+    #[cfg(windows)]
+    {
+        if let Some(o) = cmd("scoop", &["list"]) {
+            let n = compte(o).saturating_sub(4);
+            if n > 0 {
+                v.push(format!("scoop : {n}"));
+            }
+        }
+        if let Some(o) = cmd("choco", &["list", "--limit-output"]) {
+            let n = compte(o);
+            if n > 0 {
+                v.push(format!("choco : {n}"));
+            }
+        }
+        let n_apps = crate::apps::index().len();
+        if n_apps > 0 {
+            v.push(format!("menu Démarrer : {n_apps}"));
+        }
+        return v;
+    }
+    #[cfg(not(windows))]
+    {
     for (nom, prog, args) in [
         ("pacman", "pacman", &["-Qq"][..]),
         ("dpkg", "dpkg-query", &["-f", "${binary:Package}\n", "-W"][..]),
@@ -100,8 +132,10 @@ fn paquets() -> Vec<String> {
         }
     }
     v
+    }
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn bureau() -> String {
     let de = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
     let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
@@ -119,23 +153,47 @@ fn bureau() -> String {
 /// Inventaire lisible (Markdown court).
 pub fn texte() -> String {
     let mut parts = vec![];
-    let noyau = cmd("uname", &["-r"]).unwrap_or_default();
-    let hote = lire(&crate::hote::etc("/etc/hostname"));
-    let hote = if hote.trim().is_empty() { cmd("uname", &["-n"]).unwrap_or_default() } else { hote.trim().to_string() };
-    let modele = [lire("/sys/class/dmi/id/sys_vendor"), lire("/sys/class/dmi/id/product_name")].iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ");
-    parts.push(format!(
-        "## Système\n- {} (noyau {noyau})\n- Machine : {}{}\n- Bureau : {}",
-        os_release(&lire(&crate::hote::etc("/etc/os-release"))),
-        if hote.is_empty() { "—".into() } else { hote },
-        if modele.is_empty() { String::new() } else { format!(" — {modele}") },
-        bureau()
-    ));
+    #[cfg(windows)]
+    {
+        let hote = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "—".into());
+        let modele = crate::os::win::modele_machine();
+        parts.push(format!(
+            "## Système\n- {}\n- Machine : {hote}{}\n- Bureau : Windows (DWM)",
+            crate::os::win::version_windows().0,
+            if modele.is_empty() { String::new() } else { format!(" — {modele}") },
+        ));
+    }
+    #[cfg(not(windows))]
+    {
+        let noyau = cmd("uname", &["-r"]).unwrap_or_default();
+        let hote = lire(&crate::hote::etc("/etc/hostname"));
+        let hote = if hote.trim().is_empty() { cmd("uname", &["-n"]).unwrap_or_default() } else { hote.trim().to_string() };
+        let modele = [lire("/sys/class/dmi/id/sys_vendor"), lire("/sys/class/dmi/id/product_name")].iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ");
+        parts.push(format!(
+            "## Système\n- {} (noyau {noyau})\n- Machine : {}{}\n- Bureau : {}",
+            os_release(&lire(&crate::hote::etc("/etc/os-release"))),
+            if hote.is_empty() { "—".into() } else { hote },
+            if modele.is_empty() { String::new() } else { format!(" — {modele}") },
+            bureau()
+        ));
+    }
     let m = crate::local::machine();
     let mut mat = vec![];
+    #[cfg(windows)]
+    {
+        let p = crate::os::win::processeur();
+        if !p.is_empty() { mat.push(format!("- Processeur : {p}")); }
+    }
+    #[cfg(not(windows))]
     if let Some(p) = processeur(&lire("/proc/cpuinfo")) {
         mat.push(format!("- Processeur : {p}"));
     }
     mat.push(format!("- Mémoire : {:.1} Go", m.ram_go));
+    #[cfg(windows)]
+    for (g, _) in crate::os::win::cartes_graphiques() {
+        mat.push(format!("- Graphique : {g}"));
+    }
+    #[cfg(not(windows))]
     for g in cartes_graphiques() {
         mat.push(format!("- Graphique : {g}"));
     }
@@ -146,6 +204,21 @@ pub fn texte() -> String {
         mat.push(format!("- Batterie : {b}"));
     }
     parts.push(format!("## Matériel\n{}", mat.join("\n")));
+    #[cfg(windows)]
+    {
+        let go = |b: u64| b as f64 / 1024f64.powi(3);
+        let d: Vec<String> = crate::os::win::disques()
+            .into_iter()
+            .map(|(n, t, l)| {
+                let u = t.saturating_sub(l);
+                format!("{n:<8} {:>6.1} Go  {:>6.1} Go  {:>6.1} Go  {:>3.0} %", go(t), go(u), go(l), u as f64 / t as f64 * 100.0)
+            })
+            .collect();
+        if !d.is_empty() {
+            parts.push(format!("## Disques\n```\nLecteur   Taille   Utilisé     Libre    %\n{}\n```", d.join("\n")));
+        }
+    }
+    #[cfg(not(windows))]
     if let Some(df) = cmd("df", &["-h", "--output=source,target,size,used,avail,pcent", "-x", "tmpfs", "-x", "devtmpfs", "-x", "efivarfs", "-x", "overlay", "-x", "squashfs"]) {
         parts.push(format!("## Disques\n{}", disques(&df)));
     }

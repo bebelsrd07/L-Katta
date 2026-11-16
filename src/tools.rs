@@ -644,8 +644,21 @@ fn changements_proprietes(v: Option<&Value>) -> Vec<(String, String)> {
 }
 
 fn run_capture(cmd: &str, timeout: Duration) -> Result<(i32, String), String> {
-    let mut c = crate::hote::commande("bash");
-    c.args(["-c", cmd]).current_dir(paths::travail());
+    #[cfg(windows)]
+    let mut c = {
+        let ps = if which("pwsh") { "pwsh" } else { "powershell" };
+        let mut c = crate::hote::commande(ps);
+        let script = format!("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {cmd}");
+        c.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", &script]);
+        c
+    };
+    #[cfg(not(windows))]
+    let mut c = {
+        let mut c = crate::hote::commande("bash");
+        c.args(["-c", cmd]);
+        c
+    };
+    c.current_dir(paths::travail());
     run_capture_avec(c, timeout)
 }
 
@@ -693,7 +706,52 @@ fn quick(cmd: &str) -> String {
     run_capture(cmd, Duration::from_secs(8)).map(|(_, o)| o.trim().to_string()).unwrap_or_default()
 }
 
+#[cfg(windows)]
+fn system_status_windows() -> String {
+    let go = |b: u64| b as f64 / 1024f64.powi(3);
+    let mut parts = vec![];
+    if let Some((tot, dispo)) = crate::os::win::memoire_vive() {
+        let util = tot.saturating_sub(dispo);
+        parts.push(format!(
+            "## Mémoire\nTotal : {:.1} Go · Utilisée : {:.1} Go ({:.0} %) · Disponible : {:.1} Go",
+            go(tot),
+            go(util),
+            util as f64 / tot as f64 * 100.0,
+            go(dispo)
+        ));
+    }
+    let disques: Vec<String> = crate::os::win::disques()
+        .into_iter()
+        .map(|(nom, tot, dispo)| {
+            let pc = (tot.saturating_sub(dispo) as f64 / tot as f64 * 100.0).round() as u32;
+            format!("{nom:<6} {:.1} Go libres sur {:.1} Go ({pc} % utilisé)", go(dispo), go(tot))
+        })
+        .collect();
+    if !disques.is_empty() {
+        parts.push(format!("## Disques\n{}", disques.join("\n")));
+    }
+    let up = crate::os::win::uptime_s();
+    let (j, h, m) = (up / 86_400, (up % 86_400) / 3600, (up % 3600) / 60);
+    let duree = if j > 0 { format!("{j} j {h} h {m} min") } else { format!("{h} h {m} min") };
+    parts.push(format!("## Charge\nAllumé depuis {duree}"));
+    let top = quick(
+        "Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 7 \
+         @{N='PID';E={$_.Id}}, ProcessName, @{N='Mo';E={[math]::Round($_.WorkingSet64/1MB)}} | Format-Table -AutoSize | Out-String -Width 120",
+    );
+    if !top.is_empty() {
+        parts.push(format!("## Processus les plus gourmands (mémoire)\n{top}"));
+    }
+    if let Some(b) = crate::os::win::batterie() {
+        parts.push(format!("## Batterie\n{b}"));
+    }
+    parts.join("\n\n")
+}
+
 pub fn system_status() -> String {
+    #[cfg(windows)]
+    return system_status_windows();
+    #[cfg(not(windows))]
+    {
     let mut parts = vec![
         format!("## Mémoire\n{}", quick("free -h")),
         format!("## Disques\n{}", quick("df -h -x tmpfs -x devtmpfs -x efivarfs -x overlay 2>/dev/null")),
@@ -715,6 +773,7 @@ pub fn system_status() -> String {
         parts.push(format!("## Cache utilisateur (~/.cache)\n{cache}"));
     }
     parts.join("\n\n")
+    }
 }
 
 const SKIP_DIRS: &[&str] = &["node_modules", ".git", "target", ".cache", "__pycache__", ".venv", "venv", ".gradle", "build", ".local/share/Trash"];
@@ -985,10 +1044,13 @@ fn shell(cmd: &str, host: &mut dyn Host, confirm_all: bool, hors_bac: bool) -> R
     if cmd.trim().is_empty() {
         return Err("commande vide".into());
     }
-    if cmd.split_whitespace().any(|w| w == "sudo" || w == "pkexec" || w == "su") {
+    let bas = cmd.to_lowercase();
+    let admin = cmd.split_whitespace().any(|w| matches!(w.to_lowercase().as_str(), "sudo" | "pkexec" | "su" | "runas" | "gsudo"))
+        || (bas.contains("start-process") && bas.contains("runas"));
+    if admin {
         return Ok(format!(
             "Commande administrateur non lancée en arrière-plan. Utilise l'outil terminal_executer : \
-             elle s'ouvrira dans Konsole, où l'utilisateur tapera son mot de passe.\n{cmd}"
+             elle s'ouvrira dans un terminal visible, où l'utilisateur validera lui-même.\n{cmd}"
         ));
     }
     if crate::sante::dangereuse(cmd) {

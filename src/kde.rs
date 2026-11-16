@@ -74,47 +74,67 @@ pub fn switch(which_one: &str) -> Result<String, String> {
     Ok(format!("Bureau {} : {}", b.numero + 1, b.nom))
 }
 
-/// Écrans (sortie de kscreen-doctor, sans couleurs).
+/// Écrans (sortie de kscreen-doctor sous KDE, moniteurs Win32 sous Windows).
 pub fn screens_text() -> String {
-    if !which("kscreen-doctor") {
-        return String::new();
+    #[cfg(windows)]
+    {
+        return crate::os::win::moniteurs()
+            .into_iter()
+            .map(|m| {
+                let (w, h) = (m.ecran.right - m.ecran.left, m.ecran.bottom - m.ecran.top);
+                let p = if m.principal { " (principal)" } else { "" };
+                format!("{}{p} · {w}×{h} à ({}, {}) · échelle {:.0} %", m.nom, m.ecran.left, m.ecran.top, m.echelle * 100.0)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
     }
-    let out = crate::hote::commande("kscreen-doctor").arg("-o").output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
-    let mut clean = String::new();
-    let mut in_esc = false;
-    for c in out.chars() {
-        match c {
-            '\u{1b}' => in_esc = true,
-            'm' if in_esc => in_esc = false,
-            _ if in_esc => {}
-            _ => clean.push(c),
+    #[cfg(not(windows))]
+    {
+        if !which("kscreen-doctor") {
+            return String::new();
         }
-    }
-    let mut rows = vec![];
-    let mut cur = String::new();
-    for l in clean.lines() {
-        let l = l.trim();
-        if let Some(r) = l.strip_prefix("Output:") {
-            if !cur.is_empty() {
-                rows.push(std::mem::take(&mut cur));
+        let out = crate::hote::commande("kscreen-doctor").arg("-o").output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+        let mut clean = String::new();
+        let mut in_esc = false;
+        for c in out.chars() {
+            match c {
+                '\u{1b}' => in_esc = true,
+                'm' if in_esc => in_esc = false,
+                _ if in_esc => {}
+                _ => clean.push(c),
             }
-            cur = r.split_whitespace().nth(1).unwrap_or("").to_string();
-        } else if l.starts_with("Geometry:") || l.starts_with("Scale:") || l == "disabled" {
-            cur.push_str(&format!(" · {l}"));
         }
+        let mut rows = vec![];
+        let mut cur = String::new();
+        for l in clean.lines() {
+            let l = l.trim();
+            if let Some(r) = l.strip_prefix("Output:") {
+                if !cur.is_empty() {
+                    rows.push(std::mem::take(&mut cur));
+                }
+                cur = r.split_whitespace().nth(1).unwrap_or("").to_string();
+            } else if l.starts_with("Geometry:") || l.starts_with("Scale:") || l == "disabled" {
+                cur.push_str(&format!(" · {l}"));
+            }
+        }
+        if !cur.is_empty() {
+            rows.push(cur);
+        }
+        rows.join("\n")
     }
-    if !cur.is_empty() {
-        rows.push(cur);
-    }
-    rows.join("\n")
 }
 
-/// Écran actif selon KWin (celui de la souris ou de la fenêtre active).
+/// Écran actif (celui de la souris ou de la fenêtre active).
 pub fn active_output() -> Option<String> {
-    let bin = if which("qdbus6") { "qdbus6" } else { "qdbus" };
-    let o = crate::hote::commande(bin).args(["org.kde.KWin", "/KWin", "org.kde.KWin.activeOutputName"]).stderr(Stdio::null()).output().ok()?;
-    let n = String::from_utf8_lossy(&o.stdout).trim().to_string();
-    (o.status.success() && !n.is_empty()).then_some(n)
+    #[cfg(windows)]
+    return crate::os::win::moniteur_souris();
+    #[cfg(not(windows))]
+    {
+        let bin = if which("qdbus6") { "qdbus6" } else { "qdbus" };
+        let o = crate::hote::commande(bin).args(["org.kde.KWin", "/KWin", "org.kde.KWin.activeOutputName"]).stderr(Stdio::null()).output().ok()?;
+        let n = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        (o.status.success() && !n.is_empty()).then_some(n)
+    }
 }
 
 /// Suit les changements de bureau (bloquant, à lancer dans un fil).

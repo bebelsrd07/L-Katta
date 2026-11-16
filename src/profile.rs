@@ -7,6 +7,7 @@
 
 use crate::{config::which, paths};
 
+#[cfg_attr(windows, allow(dead_code))]
 fn run(cmd: &str, args: &[&str]) -> String {
     crate::hote::commande(cmd)
         .args(args)
@@ -17,30 +18,44 @@ fn run(cmd: &str, args: &[&str]) -> String {
         .unwrap_or_default()
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn read(path: &str) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
 }
 
 fn os_release() -> String {
-    let txt = read(&crate::hote::etc("/etc/os-release"));
-    txt.lines()
-        .find_map(|l| l.strip_prefix("PRETTY_NAME="))
-        .map(|v| v.trim_matches('"').to_string())
-        .unwrap_or_else(|| "Linux".into())
+    #[cfg(windows)]
+    return crate::os::win::version_windows().0;
+    #[cfg(not(windows))]
+    {
+        let txt = read(&crate::hote::etc("/etc/os-release"));
+        txt.lines()
+            .find_map(|l| l.strip_prefix("PRETTY_NAME="))
+            .map(|v| v.trim_matches('"').to_string())
+            .unwrap_or_else(|| "Linux".into())
+    }
 }
 
 fn cpu() -> String {
-    let info = read("/proc/cpuinfo");
-    let name = info
-        .lines()
-        .find_map(|l| l.strip_prefix("model name").and_then(|r| r.split_once(':')).map(|(_, v)| v.trim().to_string()))
-        .unwrap_or_else(|| "inconnu".into());
-    let n = info.lines().filter(|l| l.starts_with("processor")).count();
-    format!("{name} ({n} fils)")
+    #[cfg(windows)]
+    return crate::os::win::processeur();
+    #[cfg(not(windows))]
+    {
+        let info = read("/proc/cpuinfo");
+        let name = info
+            .lines()
+            .find_map(|l| l.strip_prefix("model name").and_then(|r| r.split_once(':')).map(|(_, v)| v.trim().to_string()))
+            .unwrap_or_else(|| "inconnu".into());
+        let n = info.lines().filter(|l| l.starts_with("processor")).count();
+        format!("{name} ({n} fils)")
+    }
 }
 
-/// Mémoire totale en Go (lue dans /proc/meminfo).
+/// Mémoire totale en Go (`/proc/meminfo` sous Linux, `GlobalMemoryStatusEx` sous Windows).
 pub fn mem_total_gb() -> f64 {
+    #[cfg(windows)]
+    return crate::os::win::memoire_vive().map(|(t, _)| t as f64 / 1024f64.powi(3)).unwrap_or(0.0);
+    #[cfg(not(windows))]
     read("/proc/meminfo")
         .lines()
         .find_map(|l| l.strip_prefix("MemTotal:"))
@@ -50,17 +65,25 @@ pub fn mem_total_gb() -> f64 {
 }
 
 fn gpu() -> String {
-    let out = run("lspci", &[]);
-    let gpus: Vec<String> = out
-        .lines()
-        .filter(|l| l.contains("VGA") || l.contains("3D controller"))
-        .map(|l| l.splitn(2, ": ").nth(1).unwrap_or(l).to_string())
-        .collect();
-    if gpus.is_empty() { "inconnu".into() } else { gpus.join(" ; ") }
+    #[cfg(windows)]
+    {
+        let g: Vec<String> = crate::os::win::cartes_graphiques().into_iter().map(|(n, _)| n).collect();
+        return if g.is_empty() { "inconnu".into() } else { g.join(" ; ") };
+    }
+    #[cfg(not(windows))]
+    {
+        let out = run("lspci", &[]);
+        let gpus: Vec<String> = out
+            .lines()
+            .filter(|l| l.contains("VGA") || l.contains("3D controller"))
+            .map(|l| l.splitn(2, ": ").nth(1).unwrap_or(l).to_string())
+            .collect();
+        if gpus.is_empty() { "inconnu".into() } else { gpus.join(" ; ") }
+    }
 }
 
 fn package_managers() -> Vec<&'static str> {
-    ["pacman", "paru", "yay", "apt", "dnf", "zypper", "flatpak", "snap", "nix", "brew"]
+    ["pacman", "paru", "yay", "apt", "dnf", "zypper", "flatpak", "snap", "nix", "brew", "winget", "scoop", "choco"]
         .into_iter()
         .filter(|c| which(c))
         .collect()
@@ -79,6 +102,16 @@ fn notable_apps() -> Vec<&'static str> {
 }
 
 fn disks() -> String {
+    #[cfg(windows)]
+    {
+        let go = |b: u64| b as f64 / 1024f64.powi(3);
+        return crate::os::win::disques()
+            .into_iter()
+            .map(|(n, t, d)| format!("{n:<6} {:.1} Go total, {:.1} Go libres ({:.0} % utilisé)", go(t), go(d), t.saturating_sub(d) as f64 / t as f64 * 100.0))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    #[cfg(not(windows))]
     run("df", &["-h", "--output=target,size,avail,pcent", "/", &paths::home_dir().to_string_lossy()])
 }
 
@@ -98,23 +131,55 @@ fn home_dirs() -> String {
 }
 
 fn user_dirs() -> String {
-    let mut out = vec![];
-    for key in ["DESKTOP", "DOCUMENTS", "DOWNLOAD", "PICTURES", "MUSIC", "VIDEOS"] {
-        let d = run("xdg-user-dir", &[key]);
-        if !d.is_empty() {
-            out.push(format!("{key}={d}"));
-        }
+    #[cfg(windows)]
+    {
+        let home = paths::home_dir();
+        return ["Desktop", "Documents", "Downloads", "Pictures", "Music", "Videos"]
+            .into_iter()
+            .map(|n| (n, home.join(n)))
+            .filter(|(_, p)| p.is_dir())
+            .map(|(n, p)| format!("{n}={}", p.display()))
+            .collect::<Vec<_>>()
+            .join(", ");
     }
-    out.join(", ")
+    #[cfg(not(windows))]
+    {
+        let mut out = vec![];
+        for key in ["DESKTOP", "DOCUMENTS", "DOWNLOAD", "PICTURES", "MUSIC", "VIDEOS"] {
+            let d = run("xdg-user-dir", &[key]);
+            if !d.is_empty() {
+                out.push(format!("{key}={d}"));
+            }
+        }
+        out.join(", ")
+    }
 }
 
 /// Mesure la machine et renvoie le texte de `machine.md`.
 pub fn measure() -> String {
-    let host = read(&crate::hote::etc("/etc/hostname")).trim().to_string();
-    let host = if host.is_empty() { run("uname", &["-n"]) } else { host };
-    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_else(|_| "inconnu".into());
-    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "inconnue".into());
-    let plasma = run("plasmashell", &["--version"]);
+    #[cfg(windows)]
+    let (host, kernel, desktop, session, plasma, user, shell) = (
+        std::env::var("COMPUTERNAME").unwrap_or_else(|_| "PC".into()),
+        "Windows NT".to_string(),
+        "Windows".to_string(),
+        "Win32 / DWM".to_string(),
+        String::new(),
+        std::env::var("USERNAME").unwrap_or_default(),
+        if which("pwsh") { "PowerShell 7".to_string() } else { "Windows PowerShell".to_string() },
+    );
+    #[cfg(not(windows))]
+    let (host, kernel, desktop, session, plasma, user, shell) = {
+        let h = read(&crate::hote::etc("/etc/hostname")).trim().to_string();
+        (
+            if h.is_empty() { run("uname", &["-n"]) } else { h },
+            run("uname", &["-r"]),
+            std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_else(|_| "inconnu".into()),
+            std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "inconnue".into()),
+            run("plasmashell", &["--version"]),
+            std::env::var("USER").unwrap_or_default(),
+            std::env::var("SHELL").unwrap_or_default(),
+        )
+    };
     format!(
         "# Machine « {host} »\n\n\
          - Système : {os} ; noyau {kernel}\n\
@@ -123,19 +188,16 @@ pub fn measure() -> String {
          - Mémoire vive : {mem:.1} Go — rester léger\n\
          - Carte graphique : {gpu}\n\
          - Utilisateur : {user} ; shell {shell} ; dossier personnel {home}\n\
-         - Dossiers XDG réels (utiliser ces chemins exacts) : {dirs}\n\
+         - Dossiers réels (utiliser ces chemins exacts) : {dirs}\n\
          - Sous-dossiers de ~ : {homedirs}\n\
          - Gestionnaires de paquets : {pm}\n\
          - Logiciels repérés : {apps}\n\n\
          ## Écrans\n\n{screens}\n\n## Bureaux virtuels\n\n{desks}\n\n## Disques\n\n```\n{disks}\n```\n",
         os = os_release(),
-        kernel = run("uname", &["-r"]),
         plasma = if plasma.is_empty() { String::new() } else { format!(", {plasma}") },
         cpu = cpu(),
         mem = mem_total_gb(),
         gpu = gpu(),
-        user = std::env::var("USER").unwrap_or_default(),
-        shell = std::env::var("SHELL").unwrap_or_default(),
         home = paths::home_dir().display(),
         dirs = user_dirs(),
         homedirs = home_dirs(),

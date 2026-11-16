@@ -155,7 +155,10 @@ pub struct PressePapiers {
 
 impl Default for MakiCfg {
     fn default() -> Self {
-        Self { actif: true, texte: 1.2, theme: "auto".into(), espece: "catta".into(), taille: 1.0, acrobaties: true, numeros_min: 15, zone: "bords".into(), ecrans_multiples: true, suivre: true, parole_min: 25, sommeil: [23, 7], conseils_h: 2, bulle_s: 9, raccourci: "Meta+K".into() }
+        // Sous Windows, Win+K ouvre le panneau « Diffuser » du système (réservé) : Ctrl+Alt+K est
+        // libre partout et modifiable dans les réglages.
+        let raccourci = if cfg!(windows) { "Ctrl+Alt+K" } else { "Meta+K" };
+        Self { actif: true, texte: 1.2, theme: "auto".into(), espece: "catta".into(), taille: 1.0, acrobaties: true, numeros_min: 15, zone: "bords".into(), ecrans_multiples: true, suivre: true, parole_min: 25, sommeil: [23, 7], conseils_h: 2, bulle_s: 9, raccourci: raccourci.into() }
     }
 }
 
@@ -205,8 +208,9 @@ impl Default for Config {
 }
 
 fn default_prenom() -> String {
-    // Champ GECOS de /etc/passwd, sinon $USER.
-    let user = std::env::var("USER").unwrap_or_default();
+    // Champ GECOS de /etc/passwd sous Linux, sinon $USER (ou %USERNAME% sous Windows).
+    let user = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_default();
+    #[cfg(not(windows))]
     if let Ok(passwd) = std::fs::read_to_string(crate::hote::etc("/etc/passwd")) {
         for line in passwd.lines() {
             let f: Vec<&str> = line.split(':').collect();
