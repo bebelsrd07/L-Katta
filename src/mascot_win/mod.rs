@@ -24,24 +24,9 @@
 //! Ce qui est écrit pour de bon dans ce dossier, c'est la surcouche : la fenêtre Win32 et sa
 //! boucle de messages, dans `win32.rs`.
 //!
-//! ## Ce que cette surcouche ne fait pas encore
-//!
-//! Elle est plus courte que `mascot/mod.rs`, et c'est assumé. Manquent à ce jour :
-//!
-//! - **les boutons d'action sous une bulle spontanée** : `actions_for` vit dans `mascot/mod.rs`
-//!   et dépend de ses outils (historique, fils, courriel). La bulle de discussion, elle, est
-//!   branchée entièrement — clics sur les 27 zones du tracé, clavier, presse-papiers, historique
-//!   des fils, réglages et choix de fichiers ;
-//! - **rien pour la fenêtre active** : elle est demandée au système par `bureau::demarrer`
-//!   (`GetForegroundWindow`, sondé toutes les 400 ms), donc le maki monte sur les fenêtres, les
-//!   évite, et se tait en visioconférence ou en plein écran. Ce qui manque encore est « Ne pas
-//!   déranger » et le micro occupé : leurs sondes passent par `gdbus` et `pactl`, qui n'existent
-//!   pas ici et rendent toujours faux — la règle de discrétion est donc incomplète, pas absente ;
-//! - **plusieurs écrans** : un seul moniteur est pris en compte, donc `Ctx.exits` est fermé
-//!   partout et le maki ne passe pas d'un écran à l'autre.
-//!
-//! Chaque absence est rappelée à l'endroit du code où elle se voit, plutôt que rassemblée ici
-//! seulement.
+//! La fenêtre Windows réutilise le dessin et la physique communs. Les changements d'écran
+//! explicites et le suivi de la fenêtre active sont pris en charge ; le passage animé entre
+//! écrans voisins reste à implémenter et à vérifier sur un bureau Windows interactif.
 
 #[path = "../mascot/behavior.rs"]
 pub mod behavior;

@@ -238,6 +238,9 @@ const WM_DESTROY: u32 = 0x0002;
 const WM_TIMER: u32 = 0x0113;
 const WM_MOUSEMOVE: u32 = 0x0200;
 const WM_MOUSEWHEEL: u32 = 0x020A;
+const WM_DISPLAYCHANGE: u32 = 0x007E;
+const WM_SETTINGCHANGE: u32 = 0x001A;
+const WM_DPICHANGED: u32 = 0x02E0;
 const WM_LBUTTONDOWN: u32 = 0x0201;
 const WM_LBUTTONUP: u32 = 0x0202;
 const WM_RBUTTONUP: u32 = 0x0205;
@@ -531,6 +534,10 @@ unsafe extern "system" fn procedure(fenetre: isize, message: u32, w: usize, l: i
                     }
                 }
             });
+            0
+        }
+        WM_DISPLAYCHANGE | WM_SETTINGCHANGE | WM_DPICHANGED => {
+            avec_etat(|a| a.actualiser_moniteur());
             0
         }
         WM_MOUSEWHEEL => {
@@ -848,7 +855,7 @@ impl Etat {
             Msg::Bubble(m, true) => self.montrer(m),
             Msg::Bubble(m, false) => self.spontane(m),
             // Une discussion ouverte ou une réponse en cours : pas d'acrobatie par-dessus.
-            Msg::Flip | Msg::Tree | Msg::Teleport | Msg::Climb if self.fige() => {}
+            Msg::Flip | Msg::Tree | Msg::Teleport | Msg::Climb | Msg::Screen if self.fige() => {}
             Msg::Flip => self.maki.flip(),
             Msg::Wave => self.maki.wave(),
             Msg::Tree => self.maki.tree_show(&ctx),
@@ -878,7 +885,50 @@ impl Etat {
             // seul moniteur est pris en compte ; `Capture` sert aux essais X11.
             Msg::Chat | Msg::Raccourci => self.basculer_chat(),
             Msg::Capture(v) => self.capture = v,
+            Msg::ActiveOutput(nom) if self.cfg.maki.suivre && self.cfg.maki.ecrans_multiples && !self.fige() && !self.traine => self.aller_moniteur(&nom),
+            Msg::Screen if self.cfg.maki.ecrans_multiples => {
+                let liste = crate::os::win::moniteurs();
+                if liste.len() > 1 {
+                    let courant = self.nom_moniteur();
+                    let i = liste.iter().position(|m| Some(&m.nom) == courant.as_ref()).unwrap_or(0);
+                    self.aller_moniteur(&liste[(i + 1) % liste.len()].nom);
+                }
+            }
             Msg::ActiveOutput(_) | Msg::Screen | Msg::Desktop(_) => {}
+        }
+    }
+
+    fn nom_moniteur(&self) -> Option<String> {
+        crate::os::win::moniteur_du_point(self.travail.left + self.maki.pos.0 as i32, self.travail.top + self.maki.pos.1 as i32)
+    }
+
+    fn actualiser_moniteur(&mut self) {
+        let nom = self.nom_moniteur();
+        let liste = crate::os::win::moniteurs();
+        if let Some(m) = liste.iter().find(|m| Some(&m.nom) == nom.as_ref()).or_else(|| liste.first()) {
+            self.appliquer_moniteur(m, false);
+        }
+        draw::set_theme(&self.cfg.maki.theme);
+    }
+
+    fn aller_moniteur(&mut self, nom: &str) {
+        if self.nom_moniteur().as_deref() == Some(nom) { return; }
+        if let Some(m) = crate::os::win::moniteurs().iter().find(|m| m.nom == nom) {
+            self.appliquer_moniteur(m, true);
+        }
+    }
+
+    fn appliquer_moniteur(&mut self, m: &crate::os::win::Moniteur, deplacement: bool) {
+        let r = m.travail;
+        self.travail = RECT { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+        self.monde = ((r.right - r.left).max(64) as f32, (r.bottom - r.top).max(64) as f32);
+        self.echelle = m.echelle;
+        let espece = Espece::parse(&self.cfg.maki.espece).unwrap_or(Espece::Catta);
+        self.s = (self.cfg.maki.taille * espece.pal().size).clamp(0.4, 3.5) * self.echelle;
+        self.place = false;
+        if deplacement {
+            let ctx = self.ctx();
+            self.maki.teleport(&ctx);
         }
     }
 
