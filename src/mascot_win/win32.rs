@@ -100,21 +100,6 @@ unsafe extern "system" {
     fn LoadCursorW(instance: isize, nom: *const u16) -> isize;
 }
 
-#[link(name = "shell32")]
-unsafe extern "system" {
-    /// Ouvrir une adresse dans le navigateur par défaut. `xdg-open` n'existe pas ici, et passer
-    /// par `cmd /c start` ferait traverser l'adresse par un interpréteur de commandes : une
-    /// adresse contenant « & » ou « | » y deviendrait une commande.
-    fn ShellExecuteW(
-        fenetre: isize,
-        operation: *const u16,
-        cible: *const u16,
-        parametres: *const u16,
-        dossier: *const u16,
-        commande: i32,
-    ) -> isize;
-}
-
 #[link(name = "gdi32")]
 unsafe extern "system" {
     fn CreateCompatibleDC(dc: isize) -> isize;
@@ -248,7 +233,6 @@ const GWL_EXSTYLE: i32 = -20;
 const SWP_NOMOVE: u32 = 0x0002;
 const SWP_NOZORDER: u32 = 0x0004;
 const SWP_NOACTIVATE: u32 = 0x0010;
-const SW_SHOWNORMAL: i32 = 1;
 
 /// Touches virtuelles. Les lettres ont le code de leur majuscule ASCII.
 const VK_SHIFT: i32 = 0x10;
@@ -1328,27 +1312,16 @@ impl Etat {
 
     /// Ouvre une adresse dans le navigateur par défaut.
     ///
-    /// `ShellExecuteW` et non `cmd /c start` : faire traverser une adresse par un interpréteur de
-    /// commandes transformerait un « & » ou un « | » en commande. Seules les adresses web passent,
-    /// comme dans la version Linux.
+    /// `hote::ouvrir`, qui est `ShellExecuteW` ici et `xdg-open` sous Linux : une seule
+    /// déclaration pour tout le projet, et la même garde des deux côtés. Seules les adresses web
+    /// passent — un lien trouvé dans une réponse n'a pas à pouvoir ouvrir autre chose.
     fn ouvrir_adresse(&mut self, u: &str) {
         if !(u.starts_with("https://") || u.starts_with("http://")) {
             return;
         }
-        let operation = large("open");
-        let cible = large(u);
-        // SAFETY : chaînes en UTF-16 terminées par un NUL et vivantes jusqu'à la fin de l'appel ;
-        // paramètres et dossier à NULL, ce que l'API accepte.
-        let r = unsafe {
-            ShellExecuteW(self.fenetre, operation.as_ptr(), cible.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL)
-        };
-        // En dessous de 32 ce n'est pas un handle mais un code d'échec. Le test de signe est là
-        // parce que `as usize` d'une valeur négative donnerait un très grand nombre, donc un échec
-        // pris pour une réussite.
-        if r < 0 || (r as usize) < 32 {
-            self.chat.entries.push(crate::chat::Entry::Info(t!("Le navigateur n'a pas pu s'ouvrir.").into()));
-        } else {
-            self.chat.entries.push(crate::chat::Entry::Info(t!("Ouvert : {}", u)));
+        match crate::hote::ouvrir(std::ffi::OsStr::new(u)) {
+            Ok(()) => self.chat.entries.push(crate::chat::Entry::Info(t!("Ouvert : {}", u))),
+            Err(_) => self.chat.entries.push(crate::chat::Entry::Info(t!("Le navigateur n'a pas pu s'ouvrir.").into())),
         }
     }
 
@@ -1650,7 +1623,9 @@ fn local(l: isize) -> (f32, f32) {
 /// ne tenant pas dans un `i16`.
 fn touche_enfoncee(vk: i32) -> bool {
     // SAFETY : lecture de l'état d'une touche, sans effet et sans ressource à libérer.
-    unsafe { GetKeyState(vk) } < 0
+    // La comparaison est DANS le bloc : écrit `unsafe { … } < 0`, Rust lit `< 0` comme le début
+    // d'une liste d'arguments de type, et non comme une comparaison.
+    unsafe { GetKeyState(vk) < 0 }
 }
 
 fn large(s: &str) -> Vec<u16> {
